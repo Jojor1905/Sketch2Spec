@@ -1,0 +1,34 @@
+# Generated frontend files
+node_modules/
+.next/
+out/
+
+# Python virtual environments and caches
+venv/
+.venv/
+backend/venv/
+backend/.venv/
+__pycache__/
+backend/__pycache__/
+*.py[cod]
+
+# Model training output (keep backend/best.pt unless you intentionally move it)
+runs/
+backend/runs/
+
+# Environment variables
+.env
+.env*.local
+
+# Editors and operating-system files
+.vscode/
+.DS_Store
+Thumbs.db
+
+# v0 / deployment generated files
+__v0_runtime_loader.js
+__v0_devtools.tsx
+__v0_jsx-dev-runtime.ts
+.snowflake/
+.v0-trash/
+.vercel/
