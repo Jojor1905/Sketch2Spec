@@ -7,10 +7,6 @@ export type DetectionBox = {
   height: number
 }
 
-export type FloorTile = { x1: number; y1: number; x2: number; y2: number }
-export type WallSide = "positive" | "negative"
-export type WallFinish = { side: WallSide; start: number; end: number; materialId: string; materialScale?: number; materialRotation?: number }
-
 export type Detection = {
   id: string
   class_id: number
@@ -28,10 +24,6 @@ export type Detection = {
   /** Optional per-object texture rotation in radians. */
   materialRotation?: number
   /** Optional height for furniture or ceiling objects. */
-  roomBoundaryTolerancePx?: number
-  roomName?: string
-  floorTiles?: FloorTile[]
-  wallFinishes?: WallFinish[]
   objectHeightM?: number
 }
 
@@ -62,10 +54,6 @@ export function normalizeDetection(
   const y2 = Number(detection.box?.y2 ?? y1)
 
   return {
-    roomName: detection.roomName,
-    roomBoundaryTolerancePx: detection.roomBoundaryTolerancePx,
-    floorTiles: detection.floorTiles?.map(tile => ({ ...tile })),
-    wallFinishes: detection.wallFinishes?.map(finish => ({ ...finish })),
     id: detection.id || makeDetectionId(`det-${index}`),
     class_id: Number(detection.class_id ?? -1),
     label: String(detection.label ?? "object"),
@@ -163,12 +151,10 @@ export function createDetection(kind: "wall" | "door" | "window" | "floor" | "ce
   }
 }
 
-export function cloneDetections(detections: Detection[]): Detection[] {
+export function cloneDetections(detections: Detection[]) {
   return detections.map((detection) => ({
     ...detection,
     box: { ...detection.box },
-    floorTiles: detection.floorTiles?.map(tile => ({ ...tile })),
-    wallFinishes: detection.wallFinishes?.map(finish => ({ ...finish })),
   }))
 }
 

@@ -41,7 +41,7 @@ export function Navbar() {
 
         <div className="hidden items-center gap-3 md:flex">
           <Button asChild variant="ghost" size="sm" className="rounded-xl">
-            <Link href="/#how-it-works">How It Works</Link>
+            <Link href="/#how-it-works">ดูขั้นตอน</Link>
           </Button>
           <Button asChild size="sm" className="rounded-xl">
             <Link href="/upload">Get Started</Link>

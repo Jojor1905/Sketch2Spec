@@ -15,7 +15,7 @@ type CropBox = {
 type ImageEditorProps = {
   file: File
   onCancel: () => void
-  onApply: (file: File, previewDataUrl: string, imageSize: { width: number; height: number }) => void
+  onApply: (file: File, previewDataUrl: string) => void
 }
 
 const MAX_OUTPUT_SIZE = 1800
@@ -33,6 +33,7 @@ function outputFileName(fileName: string) {
 export function ImageEditor({ file, onCancel, onApply }: ImageEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
+  const objectUrlRef = useRef<string | null>(null)
   const dragStartRef = useRef<{ x: number; y: number } | null>(null)
 
   const [rotation, setRotation] = useState(0)
@@ -74,31 +75,24 @@ export function ImageEditor({ file, onCancel, onApply }: ImageEditorProps) {
 
   useEffect(() => {
     const objectUrl = URL.createObjectURL(file)
-    let active = true
-    imageRef.current = null
-    setIsLoading(true)
-    setError(null)
-    setCropBox(null)
+    objectUrlRef.current = objectUrl
 
     const image = new Image()
     image.onload = () => {
-      if (!active) return
       imageRef.current = image
       setError(null)
       setIsLoading(false)
     }
     image.onerror = () => {
-      if (!active) return
       setIsLoading(false)
       setError("ไม่สามารถเปิดรูปภาพนี้เพื่อแก้ไขได้")
     }
     image.src = objectUrl
 
     return () => {
-      active = false
-      image.onload = null
-      image.onerror = null
-      URL.revokeObjectURL(objectUrl)
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current)
+      }
     }
   }, [file])
 
@@ -194,7 +188,7 @@ export function ImageEditor({ file, onCancel, onApply }: ImageEditorProps) {
           type: "image/jpeg",
           lastModified: Date.now(),
         })
-        onApply(editedFile, outputCanvas.toDataURL("image/jpeg", 0.9), { width: sw, height: sh })
+        onApply(editedFile, outputCanvas.toDataURL("image/jpeg", 0.9))
       },
       "image/jpeg",
       0.9,
@@ -296,7 +290,7 @@ export function ImageEditor({ file, onCancel, onApply }: ImageEditorProps) {
             <Button type="button" variant="ghost" className="flex-1 rounded-xl sm:flex-none" onClick={onCancel}>
               ยกเลิก
             </Button>
-            <Button type="button" className="flex-1 rounded-xl sm:flex-none" onClick={applyEdit} disabled={isLoading || !cropBox || Boolean(error)}>
+            <Button type="button" className="flex-1 rounded-xl sm:flex-none" onClick={applyEdit} disabled={isLoading || Boolean(error)}>
               ใช้รูปนี้
             </Button>
           </div>
