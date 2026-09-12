@@ -1165,6 +1165,7 @@ export default function UploadPage() {
 
               {hasWorkspace && imageSize && workspaceView === "3d" && (
                 <EditableFloorPlan3D
+                  imageUrl={previewDataUrl}
                   detections={editableDetections}
                   imageSize={imageSize}
                   selectedId={selectedId}

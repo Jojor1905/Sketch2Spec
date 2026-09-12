@@ -1,5 +1,5 @@
 "use client"
-
+import { exportSketch2SpecPdf } from "@/lib/export-report"
 import { Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber"
 import { Edges, Environment, Html, OrbitControls } from "@react-three/drei"
@@ -39,6 +39,7 @@ import {
   ZoomIn,
   ZoomOut,
   X,
+  FileText,
 } from "lucide-react"
 import { DoubleSide, MOUSE, Plane, RepeatWrapping, SRGBColorSpace, Texture, TextureLoader, Vector2, Vector3 } from "three"
 
@@ -93,6 +94,7 @@ type DragOperation =
   | "resize-se"
 
 type Props = {
+  imageUrl: string | null
   detections: Detection[]
   imageSize: ImageSize
   selectedId: string | null
@@ -3951,6 +3953,42 @@ export function EditableFloorPlan3D(props: Props) {
     URL.revokeObjectURL(url)
     showNotice("ส่งออกรายการวัสดุเป็น CSV แล้ว")
   }
+  async function exportPdfReport() {
+  if (!props.imageSize) {
+    showNotice("ยังไม่มีข้อมูลแปลน")
+    return
+  }
+
+  const canvas = canvasHostRef.current?.querySelector("canvas")
+
+  if (!canvas) {
+    showNotice("ไม่พบภาพ 3D สำหรับ Export")
+    return
+  }
+
+  try {
+    const threeDImageUrl = canvas.toDataURL("image/png")
+
+    await exportSketch2SpecPdf({
+      imageUrl: props.imageUrl,
+      threeDImageUrl,
+      detections: props.detections,
+      imageSize: props.imageSize,
+      metersPerPixel: props.metersPerPixel,
+      budget,
+    })
+
+    showNotice("สร้างรายงาน PDF แล้ว")
+  } catch (error) {
+    console.error(error)
+
+    showNotice(
+      error instanceof Error
+        ? error.message
+        : "ไม่สามารถ Export PDF ได้",
+    )
+  }
+}
 
   function duplicateSelected() {
     if (!selected) return
@@ -4618,6 +4656,17 @@ export function EditableFloorPlan3D(props: Props) {
                     <p className="text-[9px] text-slate-400">เริ่มคิดราคาเมื่อเลือกและใช้วัสดุกับโมเดลแล้วเท่านั้น</p>
                   </div>
                 </div>
+                <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={exportPdfReport}
+                  className="rounded-lg bg-blue-500/90 p-2 text-white hover:bg-blue-500 disabled:opacity-40"
+                  disabled={!budget.hasScale}
+                  title="Export PDF"
+                >
+                  <FileText className="h-4 w-4" />
+                </button>
+
                 <button
                   type="button"
                   onClick={exportBudgetCsv}
@@ -4627,6 +4676,7 @@ export function EditableFloorPlan3D(props: Props) {
                 >
                   <Download className="h-4 w-4" />
                 </button>
+                </div>
               </div>
 
               {!budget.hasScale ? (
