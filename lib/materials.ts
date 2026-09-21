@@ -1,3 +1,4 @@
+import { floorAreaPx } from "./rooms";
 import type { Detection, ImageSize } from "./floor-plan";
 import { labelKind } from "./floor-plan";
 
@@ -9,6 +10,8 @@ export type MaterialCategory =
   | "wall-paint"
   | "wallpaper"
   | "woodwork"
+  | "door"
+  | "window"
   | "ceiling"
   | "furniture"
   | "glass-metal";
@@ -172,7 +175,7 @@ export const MATERIALS: MaterialDefinition[] = [
   {
     id: "door-white",
     target: "door",
-    category: "woodwork",
+    category: "door",
     name: "ประตูไม้สีขาว",
     description: "บานเรียบใช้งานทั่วไป",
     color: "#EEECE5",
@@ -188,7 +191,7 @@ export const MATERIALS: MaterialDefinition[] = [
   {
     id: "door-oak",
     target: "door",
-    category: "woodwork",
+    category: "door",
     name: "ประตูไม้โอ๊ก",
     description: "ลายไม้ธรรมชาติ",
     color: "#A87543",
@@ -204,7 +207,7 @@ export const MATERIALS: MaterialDefinition[] = [
   {
     id: "door-walnut-real",
     target: "door",
-    category: "woodwork",
+    category: "door",
     name: "ประตูวอลนัตลายจริง",
     description: "ลายไม้จริงพร้อมผิวกึ่งด้าน",
     color: "#FFFFFF",
@@ -229,7 +232,7 @@ export const MATERIALS: MaterialDefinition[] = [
   {
     id: "door-black-metal",
     target: "door",
-    category: "glass-metal",
+    category: "door",
     name: "ประตูกรอบดำ",
     description: "สไตล์โมเดิร์น",
     color: "#2E3136",
@@ -245,7 +248,7 @@ export const MATERIALS: MaterialDefinition[] = [
   {
     id: "window-clear",
     target: "window",
-    category: "glass-metal",
+    category: "window",
     name: "กระจกใสกรอบอลูมิเนียม",
     description: "กรอบสีเงินมาตรฐาน",
     color: "#8ED7E8",
@@ -262,7 +265,7 @@ export const MATERIALS: MaterialDefinition[] = [
   {
     id: "window-black",
     target: "window",
-    category: "glass-metal",
+    category: "window",
     name: "กระจกกรอบดำ",
     description: "กรอบดำโมเดิร์น",
     color: "#5DB7CB",
@@ -279,7 +282,7 @@ export const MATERIALS: MaterialDefinition[] = [
   {
     id: "window-wood",
     target: "window",
-    category: "woodwork",
+    category: "window",
     name: "หน้าต่างกรอบไม้",
     description: "โทนอบอุ่นธรรมชาติ",
     color: "#72BCCD",
@@ -614,7 +617,7 @@ function manualFloorAreaM2(detections: Detection[], metersPerPixel: number) {
     .reduce(
       (sum, floor) =>
         sum +
-        floor.box.width * floor.box.height * metersPerPixel * metersPerPixel,
+        floorAreaPx(floor) * metersPerPixel * metersPerPixel,
       0,
     );
 }
@@ -658,16 +661,21 @@ export function calculateBudget(
   detections.forEach((detection) => {
     const target = targetForDetection(detection);
     if (!target) return;
+    if (target === "wall") {
+      const oneSideArea = wallLengthPx(detection) * metersPerPixel * wallHeightM(detection);
+      const covered = (detection.wallFinishes ?? []).reduce((sum, finish) => {
+        const fraction = Math.max(0, finish.end - finish.start);
+        add(materialById(finish.materialId, "wall"), oneSideArea * fraction);
+        return sum + fraction;
+      }, 0);
+      if (detection.materialApplied && detection.materialId) add(materialById(detection.materialId, "wall"), oneSideArea * Math.max(0, 2 - covered));
+      return;
+    }
     // The initial generated model uses preview materials only. Add a BOQ line
     // after the user explicitly applies a finish to the object.
     if (detection.materialApplied !== true || !detection.materialId) return;
     const material = materialById(detection.materialId, target);
-    if (target === "wall") {
-      // ผิวตกแต่งผนังสองด้าน เพื่อให้เหมาะกับการประมาณวัสดุเบื้องต้น
-      const area =
-        wallLengthPx(detection) * metersPerPixel * wallHeightM(detection) * 2;
-      add(material, area);
-    } else if (target === "door") {
+    if (target === "door") {
       add(material, 1);
     } else if (target === "window") {
       add(material, openingAreaM2(detection, metersPerPixel));
@@ -675,10 +683,8 @@ export function calculateBudget(
       add(material, 1);
     } else {
       const area =
-        detection.box.width *
-        detection.box.height *
-        metersPerPixel *
-        metersPerPixel;
+        (target === "floor" ? floorAreaPx(detection) : detection.box.width * detection.box.height) *
+        metersPerPixel * metersPerPixel;
       add(material, area);
     }
   });

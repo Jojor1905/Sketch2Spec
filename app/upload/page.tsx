@@ -1,5 +1,7 @@
 "use client"
 
+import { introducesFloorOverlap } from "@/lib/rooms"
+import { rebuildRoomFloors, removeDuplicateWalls } from "@/lib/floor-plan-repair"
 import dynamic from "next/dynamic"
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -9,11 +11,11 @@ import {
   Box,
   CheckCircle2,
   Crop,
-  DoorOpen,
+  Download,
+  FolderOpen,
   FileImage,
   FileText,
   Loader2,
-  PanelTop,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -23,7 +25,6 @@ import {
   RefreshCcw,
   RotateCw,
   ScanSearch,
-  SquareDashed,
   Trash2,
   Undo2,
   Upload,
@@ -31,6 +32,9 @@ import {
 } from "lucide-react"
 
 import { FloorPlan2DEditor } from "@/components/floor-plan-2d-editor"
+import { BackendStatus } from "@/components/backend-status"
+import { downloadProject, parseProjectFile } from "@/lib/project-file"
+import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog"
 import { ImageEditor } from "@/components/upload-image-editor"
 import { Button } from "@/components/ui/button"
 import { clearActiveProject, loadActiveProject, saveActiveProject } from "@/lib/project-storage"
@@ -42,7 +46,6 @@ import {
   clampBox,
   cloneDetections,
   colorByLabel,
-  createDetection,
   detectionsEqual,
   labelKind,
   normalizeDetection,
@@ -166,15 +169,19 @@ function readFileAsDataUrl(file: Blob) {
 
 function sleep(milliseconds: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
-    const timer = window.setTimeout(resolve, milliseconds)
-    signal?.addEventListener(
-      "abort",
-      () => {
-        window.clearTimeout(timer)
-        reject(new DOMException("Aborted", "AbortError"))
-      },
-      { once: true },
-    )
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"))
+      return
+    }
+    const abort = () => {
+      window.clearTimeout(timer)
+      reject(new DOMException("Aborted", "AbortError"))
+    }
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener("abort", abort)
+      resolve()
+    }, milliseconds)
+    signal?.addEventListener("abort", abort, { once: true })
   })
 }
 
@@ -263,9 +270,17 @@ function findAutomaticScaleReference(detections: Detection[]) {
 export default function UploadPage() {
   const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const projectInputRef = useRef<HTMLInputElement | null>(null)
+  const flushSaveRef = useRef<(() => void) | null>(null)
+  const pendingSaveRef = useRef<number | null>(null)
   const detectionAbortRef = useRef<AbortController | null>(null)
   const historyRef = useRef<Detection[][]>([])
   const historyIndexRef = useRef(-1)
+
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
+  const [storageMessage, setStorageMessage] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
 
   const [file, setFile] = useState<File | null>(null)
   const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null)
@@ -285,7 +300,7 @@ export default function UploadPage() {
   const [isEditorOpen, setIsEditorOpen] = useState(false)
   const [isRestoring, setIsRestoring] = useState(true)
   const [leftPanelOpen, setLeftPanelOpen] = useState(true)
-  const [rightPanelOpen, setRightPanelOpen] = useState(true)
+  const [rightPanelOpen, setRightPanelOpen] = useState(false)
   const [backendProgress, setBackendProgress] = useState(0)
   const [pdfSource, setPdfSource] = useState<File | null>(null)
   const [pdfPageCount, setPdfPageCount] = useState(0)
@@ -294,7 +309,7 @@ export default function UploadPage() {
 
   const isProcessing = ["preparing", "walls", "openings", "generating"].includes(phase)
   const currentPhase = phaseDetails[phase]
-  const hasWorkspace = Boolean(imageSize && editableDetections.length >= 0 && phase === "complete")
+  const hasWorkspace = Boolean(imageSize)
   const canUndo = historyIndexRef.current > 0
   const canRedo = historyIndexRef.current >= 0 && historyIndexRef.current < historyRef.current.length - 1
 
@@ -336,9 +351,9 @@ export default function UploadPage() {
   }, [phase])
 
   const showLeftPanel = !hasWorkspace || leftPanelOpen
-  const showRightPanel = !hasWorkspace || (workspaceView === "2d" && rightPanelOpen)
+  const showRightPanel = hasWorkspace && workspaceView === "2d" && rightPanelOpen
   const workspaceLayoutClass = !hasWorkspace
-    ? "xl:grid-cols-[300px_minmax(0,1fr)_360px]"
+    ? "xl:grid-cols-[300px_minmax(0,1fr)]"
     : workspaceView === "3d"
       ? showLeftPanel
         ? "xl:grid-cols-[230px_minmax(0,1fr)]"
@@ -362,6 +377,11 @@ export default function UploadPage() {
   const commitDetections = useCallback((detections: Detection[]) => {
     const next = cloneDetections(detections)
     const current = historyRef.current[historyIndexRef.current]
+    if (current && introducesFloorOverlap(current, next)) {
+      setEditableDetections(cloneDetections(current))
+      setError("พื้นทับห้องอื่น จึงคืนตำแหน่งเดิมให้แล้ว เลือกพื้นห้องเดิมเพื่อเปลี่ยนวัสดุ หรือกดแบ่งพื้นตามห้อง")
+      return
+    }
 
     if (current && detectionsEqual(current, next)) {
       setEditableDetections(next)
@@ -438,7 +458,7 @@ export default function UploadPage() {
         setPhase(saved.imageSize ? "complete" : "idle")
         setBackendProgress(saved.imageSize ? 100 : 0)
       } catch {
-        await clearActiveProject().catch(() => undefined)
+        if (isMounted) setStorageMessage("กู้คืนงานล่าสุดไม่สำเร็จ ข้อมูลเดิมยังถูกเก็บไว้ ลองโหลดหน้าใหม่หรือเปิดไฟล์สำรอง")
       } finally {
         if (isMounted) setIsRestoring(false)
       }
@@ -453,9 +473,11 @@ export default function UploadPage() {
   }, [resetHistory])
 
   useEffect(() => {
-    if (isRestoring || !file || !previewDataUrl) return
+    if (isRestoring || isProcessing || !file || !previewDataUrl) return
 
-    const saveTimer = window.setTimeout(() => {
+    const save = () => {
+      pendingSaveRef.current = null
+      setSaveStatus("saving")
       void saveActiveProject({
         fileName: file.name,
         fileType: file.type,
@@ -465,17 +487,20 @@ export default function UploadPage() {
         metersPerPixel,
         floorMaterialId,
         updatedAt: Date.now(),
-      }).catch(() => undefined)
-    }, 250)
+      }).then(() => setSaveStatus("saved")).catch(() => setSaveStatus("error"))
+    }
+    flushSaveRef.current = save
+    const saveTimer = window.setTimeout(save, 250)
+    pendingSaveRef.current = saveTimer
 
-    return () => window.clearTimeout(saveTimer)
-  }, [editableDetections, file, floorMaterialId, imageSize, isRestoring, metersPerPixel, previewDataUrl])
+    return () => { window.clearTimeout(saveTimer); pendingSaveRef.current = null }
+  }, [editableDetections, file, floorMaterialId, imageSize, isRestoring, isProcessing, metersPerPixel, previewDataUrl])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null
-      const isTyping = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable
-      if (isTyping) return
+      const isTyping = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.tagName === "SELECT" || target?.isContentEditable
+      if (isTyping || pendingAction || isEditorOpen || isPdfChooserOpen || isProcessing) return
 
       const commandPressed = event.ctrlKey || event.metaKey
       const isKeyZ = event.code === "KeyZ" || event.key.toLowerCase() === "z"
@@ -504,7 +529,24 @@ export default function UploadPage() {
 
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [deleteSelected, redo, selectedId, undo])
+  }, [deleteSelected, redo, selectedId, undo, pendingAction, isEditorOpen, isPdfChooserOpen, isProcessing])
+
+  useEffect(() => {
+    function flush() {
+      if (pendingSaveRef.current !== null) {
+        window.clearTimeout(pendingSaveRef.current)
+        flushSaveRef.current?.()
+      }
+    }
+    function onVisibility() { if (document.visibilityState === "hidden") flush() }
+    window.addEventListener("pagehide", flush)
+    document.addEventListener("visibilitychange", onVisibility)
+    return () => {
+      flush()
+      window.removeEventListener("pagehide", flush)
+      document.removeEventListener("visibilitychange", onVisibility)
+    }
+  }, [])
 
   function cancelActiveDetection() {
     detectionAbortRef.current?.abort()
@@ -514,6 +556,7 @@ export default function UploadPage() {
   function validateFile(nextFile: File) {
     const supported = ACCEPTED_TYPES.includes(nextFile.type) || isPdf(nextFile)
     if (!supported) throw new Error("รองรับไฟล์ JPG, PNG, WebP และ PDF เท่านั้น")
+    if (nextFile.size === 0) throw new Error("ไฟล์ว่าง กรุณาเลือกไฟล์แปลนที่มีข้อมูล")
     if (nextFile.size > MAX_FILE_SIZE) {
       throw new Error("ไฟล์มีขนาดเกิน 25 MB กรุณาลดขนาดไฟล์ก่อนอัปโหลด")
     }
@@ -591,15 +634,22 @@ export default function UploadPage() {
     }
   }
 
+  function choosePlan(nextFile: File | undefined) {
+    if (!nextFile || isProcessing || isRestoring || importing) return
+    try {
+      validateFile(nextFile)
+      if (hasWorkspace) confirmReplace(() => void handleFile(nextFile))
+      else void handleFile(nextFile)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "ไฟล์ไม่ถูกต้อง")
+    }
+  }
+
   async function handleFile(nextFile: File | undefined) {
     if (!nextFile) return
 
+    if (isProcessing || isRestoring) return
     setError(null)
-    setImageSize(null)
-    setSelectedId(null)
-    setMetersPerPixel(null)
-    setKnownLength("")
-    resetHistory([])
 
     try {
       validateFile(nextFile)
@@ -634,22 +684,31 @@ export default function UploadPage() {
     }
   }
 
-  function applyEditedImage(editedFile: File, dataUrl: string) {
+  function applyEditedImage(editedFile: File, dataUrl: string, preparedSize: ImageSize) {
+    cancelActiveDetection()
+    setWorkspaceView("2d")
+    setFloorMaterialId(DEFAULT_MATERIAL.floor)
+    setKnownLength("")
     setFile(editedFile)
     setPreviewDataUrl(dataUrl)
-    setImageSize(null)
+    setImageSize(preparedSize)
     setSelectedId(null)
     setMetersPerPixel(null)
     resetHistory([])
     setError(null)
     setPhase("idle")
+    setRightPanelOpen(false)
+    setLeftPanelOpen(true)
     setIsEditorOpen(false)
     setEditorFile(null)
   }
 
   function clearProject() {
     cancelActiveDetection()
-    void clearActiveProject().catch(() => undefined)
+    if (pendingSaveRef.current) window.clearTimeout(pendingSaveRef.current)
+    void clearActiveProject().catch(() => setStorageMessage("ล้างงานที่บันทึกไว้ไม่สำเร็จ กรุณาลองอีกครั้ง"))
+    setSaveStatus("idle")
+    setFloorMaterialId(DEFAULT_MATERIAL.floor)
     setFile(null)
     setPreviewDataUrl(null)
     setImageSize(null)
@@ -669,18 +728,61 @@ export default function UploadPage() {
     setBackendProgress(0)
   }
 
+  function confirmReplace(action: () => void) {
+    if (file) setPendingAction(() => action)
+    else action()
+  }
+
+  function exportProject() {
+    if (!file || !previewDataUrl) return
+    downloadProject({ fileName: file.name, fileType: file.type, previewDataUrl, imageSize, detections: editableDetections, metersPerPixel, floorMaterialId, updatedAt: Date.now() })
+  }
+
+  async function importProject(nextFile: File | undefined) {
+    if (!nextFile || isProcessing || importing) return
+    setImporting(true)
+    setError(null)
+    try {
+      if (nextFile.size > 40 * 1024 * 1024) throw new Error("ไฟล์โปรเจกต์มีขนาดเกิน 40 MB")
+      const saved = parseProjectFile(await nextFile.text())
+      const restoredFile = await dataUrlToFile(saved.previewDataUrl, saved.fileName, saved.fileType)
+      const bitmap = await createImageBitmap(restoredFile)
+      bitmap.close()
+      confirmReplace(() => {
+        cancelActiveDetection()
+        setFile(restoredFile)
+        setPreviewDataUrl(saved.previewDataUrl)
+        setImageSize(saved.imageSize)
+        resetHistory(saved.detections.map((d, index) => normalizeDetection(d as Detection, index)))
+        setMetersPerPixel(saved.metersPerPixel)
+        setKnownLength("")
+        setFloorMaterialId(saved.floorMaterialId ?? DEFAULT_MATERIAL.floor)
+        setSelectedId(null)
+        setWorkspaceView("2d")
+        setPhase(saved.imageSize ? "complete" : "idle")
+        setBackendProgress(saved.imageSize ? 100 : 0)
+        setStorageMessage(null)
+        setError(null)
+      })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "เปิดโปรเจกต์ไม่สำเร็จ")
+    } finally {
+      setImporting(false)
+      if (projectInputRef.current) projectInputRef.current.value = ""
+    }
+  }
+
   async function runDetection() {
-    if (!file) return
+    if (!file || isProcessing) return
 
     cancelActiveDetection()
     const controller = new AbortController()
     detectionAbortRef.current = controller
     setError(null)
-    setImageSize(null)
-    resetHistory([])
-    setSelectedId(null)
     setPhase("preparing")
     setBackendProgress(5)
+    let timedOut = false
+    const timeout = window.setTimeout(() => { timedOut = true; controller.abort() }, 120000)
 
     const runLegacyDetection = async () => {
       setPhase("walls")
@@ -757,32 +859,39 @@ export default function UploadPage() {
       )
       setPhase("generating")
       setBackendProgress(96)
-      setImageSize(result.image)
-      resetHistory(normalized)
       await sleep(120, controller.signal)
+      if (controller.signal.aborted) return
+      setImageSize(result.image)
+      const cleaned = removeDuplicateWalls(normalized)
+      resetHistory(rebuildRoomFloors(cleaned, result.image))
+      setMetersPerPixel(null)
+      setKnownLength("")
+      setSelectedId(null)
+      setWorkspaceView("2d")
       setPhase("complete")
       setBackendProgress(100)
     } catch (caught) {
-      if (caught instanceof DOMException && caught.name === "AbortError") return
+      if (controller.signal.aborted) {
+        if (timedOut) {
+          setPhase("error")
+          setError("AI ใช้เวลานานเกิน 2 นาที ลองตรวจการเชื่อมต่อแล้วกดตรวจจับอีกครั้ง งานเดิมยังอยู่")
+        }
+        return
+      }
       setPhase("error")
       setBackendProgress(0)
       const message = caught instanceof Error ? caught.message : "Backend error"
       setError(
         message === "Not Found"
           ? "Frontend กับ Backend เป็นคนละเวอร์ชัน กรุณารีสตาร์ต Backend จากโฟลเดอร์โปรเจกต์นี้"
-          : message,
+          : caught instanceof TypeError
+            ? "เชื่อมต่อ AI ไม่ได้ กรุณาเปิด backend แล้วลองอีกครั้ง งานเดิมยังอยู่"
+            : message,
       )
     } finally {
+      window.clearTimeout(timeout)
       if (detectionAbortRef.current === controller) detectionAbortRef.current = null
     }
-  }
-
-  function addDetection(kind: "wall" | "door" | "window") {
-    if (!imageSize) return
-    const detection = createDetection(kind, imageSize)
-    const next = [...editableDetections, detection]
-    commitDetections(next)
-    setSelectedId(detection.id)
   }
 
   function updateSelectedBox(field: "x1" | "y1" | "width" | "height", rawValue: string) {
@@ -892,6 +1001,12 @@ export default function UploadPage() {
 
   return (
     <main className="min-h-screen bg-background px-4 py-5 text-foreground sm:px-6 sm:py-8">
+      <AlertDialog open={Boolean(pendingAction)} onOpenChange={open => { if (!open) setPendingAction(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader><AlertDialogTitle>แทนที่งานปัจจุบันหรือไม่?</AlertDialogTitle><AlertDialogDescription>การทำรายการนี้อาจแทนที่แปลนหรือผลแก้ไขเดิม กดสำรองโปรเจกต์ก่อน หากต้องการเก็บงานนี้ไว้</AlertDialogDescription></AlertDialogHeader>
+          <AlertDialogFooter><AlertDialogCancel>เก็บงานเดิม</AlertDialogCancel><AlertDialogAction onClick={() => { const action = pendingAction; setPendingAction(null); action?.() }}>ดำเนินการต่อ</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {isPdfChooserOpen && pdfSource && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-2xl">
@@ -916,7 +1031,7 @@ export default function UploadPage() {
               />
             </label>
             <div className="mt-5 flex gap-2">
-              <Button type="button" variant="ghost" className="flex-1 rounded-xl" onClick={() => { setIsPdfChooserOpen(false); setPdfSource(null); setPhase("idle") }}>ยกเลิก</Button>
+              <Button type="button" variant="ghost" className="flex-1 rounded-xl" onClick={() => { setIsPdfChooserOpen(false); setPdfSource(null); setPhase(imageSize ? "complete" : "idle") }}>ยกเลิก</Button>
               <Button type="button" className="flex-1 rounded-xl" onClick={() => void openPdfPage(pdfPage)}>เปิดหน้านี้</Button>
             </div>
           </div>
@@ -937,7 +1052,7 @@ export default function UploadPage() {
 
       <div className="mx-auto max-w-[1900px]">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3 sm:mb-8">
-          <Button type="button" variant="ghost" className="rounded-2xl" onClick={() => router.push("/")}>
+          <Button type="button" variant="ghost" className="rounded-2xl" onClick={() => { if (pendingSaveRef.current !== null) { window.clearTimeout(pendingSaveRef.current); flushSaveRef.current?.() } router.push("/") }}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             กลับหน้าแรก
           </Button>
@@ -970,18 +1085,32 @@ export default function UploadPage() {
               </>
             )}
             {file && (
-              <Button type="button" variant="outline" className="rounded-2xl" onClick={clearProject}>
+              <Button type="button" variant="outline" className="rounded-2xl" onClick={() => confirmReplace(clearProject)} disabled={isRestoring || importing || isProcessing}>
                 <RefreshCcw className="mr-2 h-4 w-4" />
                 เริ่มใหม่
               </Button>
             )}
-            <div className="rounded-full bg-primary/10 px-4 py-2 text-sm font-medium text-primary">
-              AI Review + 3D Workspace
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={() => projectInputRef.current?.click()} disabled={isProcessing || isRestoring || importing}>
+              <FolderOpen className="mr-2 h-4 w-4" />{importing ? "กำลังเปิด..." : "เปิดโปรเจกต์"}
+            </Button>
+            {file && <Button type="button" variant="outline" className="rounded-2xl" onClick={exportProject} disabled={isProcessing || isRestoring}><Download className="mr-2 h-4 w-4" />สำรองโปรเจกต์</Button>}
+            <input ref={projectInputRef} type="file" accept=".json" className="hidden" aria-label="เปิดไฟล์โปรเจกต์" onChange={event => void importProject(event.target.files?.[0])} />
+            <div className="space-y-1 px-2">
+              <BackendStatus />
+              {file && <p role="status" className="text-[11px] text-muted-foreground">{saveStatus === "saved" ? "บันทึกงานในเบราว์เซอร์นี้แล้ว" : saveStatus === "error" ? "บันทึกงานไม่สำเร็จ" : "กำลังบันทึกงาน…"}</p>}
             </div>
           </div>
         </div>
 
+        {(error || storageMessage || saveStatus === "error") && (
+          <div role="alert" className="mb-4 flex items-start gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-4 text-sm">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-destructive" />
+            <p className="min-w-0 break-words">{error || storageMessage || "บันทึกอัตโนมัติไม่สำเร็จ กรุณากดสำรองโปรเจกต์เพื่อเก็บงานลงเครื่อง"}</p>
+            <button type="button" className="ml-auto shrink-0 text-xs underline" onClick={() => { setError(null); setStorageMessage(null) }}>ปิดข้อความ</button>
+          </div>
+        )}
         <div className={`grid gap-4 ${workspaceLayoutClass}`}>
+
           {showLeftPanel && (
           <aside className="h-fit rounded-3xl border border-border bg-card p-4 shadow-sm xl:sticky xl:top-6">
             <div className="flex items-center justify-between gap-2">
@@ -1016,7 +1145,7 @@ export default function UploadPage() {
               onDrop={(event) => {
                 event.preventDefault()
                 setIsDropActive(false)
-                void handleFile(event.dataTransfer.files?.[0])
+                choosePlan(event.dataTransfer.files?.[0])
               }}
               className={`${hasWorkspace ? "hidden" : "mt-6 flex"} min-h-44 w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed p-5 text-center transition ${
                 isDropActive
@@ -1039,7 +1168,7 @@ export default function UploadPage() {
               type="file"
               accept="image/jpeg,image/png,image/webp,application/pdf,.pdf"
               className="hidden"
-              onChange={(event) => void handleFile(event.target.files?.[0])}
+              onChange={(event) => { const next = event.target.files?.[0]; event.target.value = ""; choosePlan(next) }} disabled={isProcessing || isRestoring || importing} aria-label="อัปโหลดแปลน"
             />
 
             {file && (
@@ -1052,21 +1181,22 @@ export default function UploadPage() {
                   </div>
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2">
-                  <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={() => { setEditorFile(file); setIsEditorOpen(true) }} disabled={isProcessing}>
+                  <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={() => hasWorkspace ? confirmReplace(() => { setEditorFile(file); setIsEditorOpen(true) }) : (setEditorFile(file), setIsEditorOpen(true))} disabled={isProcessing}>
                     <Crop className="mr-2 h-4 w-4" />Crop
                   </Button>
-                  <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={() => { setEditorFile(file); setIsEditorOpen(true) }} disabled={isProcessing}>
+                  <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={() => hasWorkspace ? confirmReplace(() => { setEditorFile(file); setIsEditorOpen(true) }) : (setEditorFile(file), setIsEditorOpen(true))} disabled={isProcessing}>
                     <RotateCw className="mr-2 h-4 w-4" />Rotate
                   </Button>
                 </div>
               </div>
             )}
 
-            <Button type="button" onClick={() => void runDetection()} disabled={!file || isProcessing} className="mt-5 w-full rounded-2xl">
+            <Button type="button" onClick={() => editableDetections.length ? confirmReplace(() => void runDetection()) : void runDetection()} disabled={!file || isProcessing || isRestoring || importing} className="mt-5 w-full rounded-2xl">
               {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wand2 className="mr-2 h-4 w-4" />}
-              {isProcessing ? "AI กำลังทำงาน..." : hasWorkspace ? "ตรวจจับใหม่" : "Run AI Detection"}
+              {isProcessing ? "AI กำลังทำงาน..." : editableDetections.length ? "ตรวจจับใหม่" : "Run AI Detection"}
             </Button>
 
+            {isProcessing && detectionAbortRef.current && <Button type="button" variant="outline" className="mt-2 w-full rounded-2xl" onClick={() => { cancelActiveDetection(); setPhase(imageSize ? "complete" : "idle"); setBackendProgress(0) }}>ยกเลิกการรอผล</Button>}
             <div className={`mt-4 rounded-2xl border border-border ${hasWorkspace ? "p-3" : "p-4"}`}>
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-medium">{currentPhase.title}</p>
@@ -1080,22 +1210,7 @@ export default function UploadPage() {
               </div>
             </div>
 
-            {hasWorkspace && imageSize && workspaceView === "2d" && (
-              <div className="mt-4 rounded-2xl border border-border p-4">
-                <p className="text-sm font-medium">เพิ่มวัตถุ</p>
-                <div className="mt-3 grid grid-cols-3 gap-2">
-                  <Button type="button" size="sm" variant="outline" className="h-auto flex-col rounded-xl px-1 py-3" onClick={() => addDetection("wall")}>
-                    <SquareDashed className="h-4 w-4" /><span className="text-[10px]">ผนัง</span>
-                  </Button>
-                  <Button type="button" size="sm" variant="outline" className="h-auto flex-col rounded-xl px-1 py-3" onClick={() => addDetection("door")}>
-                    <DoorOpen className="h-4 w-4" /><span className="text-[10px]">ประตู</span>
-                  </Button>
-                  <Button type="button" size="sm" variant="outline" className="h-auto flex-col rounded-xl px-1 py-3" onClick={() => addDetection("window")}>
-                    <PanelTop className="h-4 w-4" /><span className="text-[10px]">หน้าต่าง</span>
-                  </Button>
-                </div>
-              </div>
-            )}
+
           </aside>
           )}
 
@@ -1103,11 +1218,11 @@ export default function UploadPage() {
             <section className="relative overflow-hidden rounded-3xl border border-border bg-card p-2 shadow-sm sm:p-3">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-secondary/60 px-3 py-2">
                 <div>
-                  <p className="text-sm font-medium">Workspace</p>
+                  <p className="text-sm font-semibold">{workspaceView === "3d" ? "สำรวจและแก้ไขโมเดล 3D" : "แก้ไขแปลน / AI Detection"}</p>
                   <p className="hidden text-xs text-muted-foreground sm:block">
                     {workspaceView === "3d"
                       ? "แก้โครงสร้างและตรวจผลในมุมมอง 3D"
-                      : "ตรวจและแก้ผลลัพธ์ AI"}
+                      : "เพิ่มวัตถุ → คลิกเลือก → ลากหรือปรับขนาด → เปิดดู 3D"}
                   </p>
                 </div>
                 {hasWorkspace ? (
@@ -1115,7 +1230,7 @@ export default function UploadPage() {
                     <Button type="button" size="sm" variant={workspaceView === "2d" ? "default" : "ghost"} className="rounded-lg" onClick={() => setWorkspaceView("2d")}>
                       <ScanSearch className="mr-2 h-4 w-4" />2D Review
                     </Button>
-                    <Button type="button" size="sm" variant={workspaceView === "3d" ? "default" : "ghost"} className="rounded-lg" onClick={() => setWorkspaceView("3d")}>
+                    <Button type="button" size="sm" variant={workspaceView === "3d" ? "default" : "ghost"} className="rounded-lg" onClick={() => { setSelectedId(null); setWorkspaceView("3d") }}>
                       <Box className="mr-2 h-4 w-4" />3D Editor
                     </Button>
                   </div>
@@ -1160,11 +1275,18 @@ export default function UploadPage() {
                     setSelectedId(detection.id)
                   }}
                   onDeleteSelected={deleteSelected}
+                  onUndo={undo}
+                  onRedo={redo}
+                  canUndo={canUndo}
+                  canRedo={canRedo}
+                  onOpenDetails={() => setRightPanelOpen(value => !value)}
+                  detailsOpen={rightPanelOpen}
                 />
               )}
 
               {hasWorkspace && imageSize && workspaceView === "3d" && (
                 <EditableFloorPlan3D
+                  previewDataUrl={previewDataUrl ?? undefined}
                   imageUrl={previewDataUrl}
                   detections={editableDetections}
                   imageSize={imageSize}
@@ -1203,12 +1325,10 @@ export default function UploadPage() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">
-                  {workspaceView === "3d" ? "Build Details" : "Detection Review"}
+                  รายละเอียดวัตถุ
                 </h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {workspaceView === "3d"
-                    ? "ข้อมูลที่จำเป็นสำหรับวัตถุที่เลือก"
-                    : "เลือกและแก้รายละเอียดผลตรวจจับ"}
+                  คลิกวัตถุบนแปลนเพื่อแก้รายละเอียด หรือกำหนดมาตราส่วนจริง
                 </p>
               </div>
               <ScanSearch className="h-5 w-5 text-primary" />
@@ -1222,17 +1342,7 @@ export default function UploadPage() {
               </div>
             )}
 
-            {error && (
-              <div className="mt-5 rounded-2xl border border-destructive/30 bg-destructive/5 p-4">
-                <div className="flex items-start gap-3">
-                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
-                  <div>
-                    <p className="text-sm font-medium text-destructive">เกิดข้อผิดพลาด</p>
-                    <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">{error}</p>
-                  </div>
-                </div>
-              </div>
-            )}
+
 
             {hasWorkspace && imageSize && (
               <div className="mt-5 space-y-4">
@@ -1265,6 +1375,12 @@ export default function UploadPage() {
                     </div>
                     {qualityIssues.length ? <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600" /> : <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />}
                   </div>
+                  <Button type="button" size="sm" variant="outline" className="mt-2 w-full" onClick={() => {
+                    const next = removeDuplicateWalls(editableDetections)
+                    commitDetections(rebuildRoomFloors(next, imageSize!))
+                    setSelectedId(null)
+                  }}>แก้ผนังซ้ำ / แบ่งพื้นตามห้อง</Button>
+                  <p className="mt-2 text-[11px] text-muted-foreground">สร้างพื้นใหม่แทนพื้นเดิม แยกตามห้องปิดและไม่ซ้อนกัน ถ้าผนังเปิดอยู่ต้องแก้แนวก่อน · ย้อนกลับได้</p>
                   {qualityIssues.length > 0 && (
                     <div className="mt-3 max-h-36 space-y-1.5 overflow-y-auto">
                       {qualityIssues.slice(0, 5).map((issue) => (
@@ -1532,7 +1648,7 @@ export default function UploadPage() {
             )}
 
             {file && (
-              <Button type="button" variant="ghost" className="mt-5 w-full rounded-xl text-destructive hover:text-destructive" onClick={clearProject}>
+              <Button type="button" variant="ghost" className="mt-5 w-full rounded-xl text-destructive hover:text-destructive" onClick={() => confirmReplace(clearProject)} disabled={isRestoring || importing || isProcessing}>
                 <Trash2 className="mr-2 h-4 w-4" />ล้างไฟล์และผลลัพธ์
               </Button>
             )}
@@ -1545,10 +1661,11 @@ export default function UploadPage() {
 }
 
 async function extractError(response: Response) {
+  const text = await response.text()
   try {
-    const payload = (await response.json()) as { detail?: string }
-    return payload.detail ?? response.statusText
+    const payload = JSON.parse(text) as { detail?: unknown }
+    return typeof payload.detail === "string" ? payload.detail : response.statusText
   } catch {
-    return (await response.text()) || response.statusText
+    return text || response.statusText
   }
 }
