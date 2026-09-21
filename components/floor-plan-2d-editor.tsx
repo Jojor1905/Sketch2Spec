@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { DoorOpen, MousePointer2, PanelTop, Plus, SquareDashed, Trash2 } from "lucide-react"
+import { DoorOpen, MousePointer2, PanelTop, Plus, SquareDashed, Trash2, Undo2, Redo2, SlidersHorizontal } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -25,6 +25,8 @@ type DragState = {
   startBox: Detection["box"]
   imageRect: DOMRect
   startDetections: Detection[]
+  pointerId: number
+  moved: boolean
 }
 
 type Props = {
@@ -37,6 +39,12 @@ type Props = {
   onCommit: (detections: Detection[]) => void
   onAdd: (detection: Detection) => void
   onDeleteSelected: () => void
+  onUndo: () => void
+  onRedo: () => void
+  canUndo: boolean
+  canRedo: boolean
+  onOpenDetails: () => void
+  detailsOpen: boolean
 }
 
 const SNAP_SCREEN_PX = 10
@@ -197,10 +205,14 @@ export function FloorPlan2DEditor({
   onCommit,
   onAdd,
   onDeleteSelected,
+  onUndo, onRedo, canUndo, canRedo, onOpenDetails, detailsOpen,
 }: Props) {
   const imageRef = useRef<HTMLImageElement | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const detectionsRef = useRef(detections)
+  const [showLabels, setShowLabels] = useState(false)
+  const [snapEnabled, setSnapEnabled] = useState(false)
+  const additionsRef = useRef(0)
   const [isDragging, setIsDragging] = useState(false)
 
   useEffect(() => {
@@ -215,7 +227,9 @@ export function FloorPlan2DEditor({
   useEffect(() => {
     function onPointerMove(event: PointerEvent) {
       const drag = dragRef.current
-      if (!drag) return
+      if (!drag || drag.pointerId !== event.pointerId) return
+      if (!drag.moved && Math.hypot(event.clientX - drag.startClientX, event.clientY - drag.startClientY) < 3) return
+      drag.moved = true
 
       const scaleX = imageSize.width / Math.max(drag.imageRect.width, 1)
       const scaleY = imageSize.height / Math.max(drag.imageRect.height, 1)
@@ -281,9 +295,10 @@ export function FloorPlan2DEditor({
       onLiveChange(nextDetections)
     }
 
-    function onPointerUp() {
+    function onPointerUp(event: PointerEvent) {
       const drag = dragRef.current
-      if (!drag) return
+      if (!drag || drag.pointerId !== event.pointerId) return
+      if (!drag.moved) { dragRef.current = null; setIsDragging(false); return }
 
       const scaleX = imageSize.width / Math.max(drag.imageRect.width, 1)
       const scaleY = imageSize.height / Math.max(drag.imageRect.height, 1)
@@ -291,7 +306,7 @@ export function FloorPlan2DEditor({
       const current = detectionsRef.current.find((item) => item.id === drag.id)
       let committed = detectionsRef.current
 
-      if (current) {
+      if (current && snapEnabled && !event.shiftKey) {
         let finalBox = current.box
         if (drag.mode === "move") {
           finalBox = snapMovedBox(current.box, drag.id, drag.startDetections, imageSize, threshold)
@@ -326,17 +341,33 @@ export function FloorPlan2DEditor({
       onCommit(committed)
     }
 
+    function cancelDrag() {
+      const drag = dragRef.current
+      if (!drag) return
+      dragRef.current = null
+      detectionsRef.current = drag.startDetections
+      setIsDragging(false)
+      onLiveChange(drag.startDetections)
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") cancelDrag()
+    }
+    window.addEventListener("blur", cancelDrag)
+    window.addEventListener("keydown", onKeyDown)
     window.addEventListener("pointermove", onPointerMove)
     window.addEventListener("pointerup", onPointerUp)
-    window.addEventListener("pointercancel", onPointerUp)
+    window.addEventListener("pointercancel", cancelDrag)
     return () => {
       window.removeEventListener("pointermove", onPointerMove)
       window.removeEventListener("pointerup", onPointerUp)
-      window.removeEventListener("pointercancel", onPointerUp)
+      window.removeEventListener("pointercancel", cancelDrag)
+      window.removeEventListener("blur", cancelDrag)
+      window.removeEventListener("keydown", onKeyDown)
     }
-  }, [imageSize, onCommit, onLiveChange])
+  }, [imageSize, onCommit, onLiveChange, snapEnabled])
 
   function beginDrag(event: React.PointerEvent, detection: Detection, mode: DragMode) {
+    if (event.button !== 0) return
     event.preventDefault()
     event.stopPropagation()
     const imageRect = imageRef.current?.getBoundingClientRect()
@@ -345,6 +376,8 @@ export function FloorPlan2DEditor({
     onSelect(detection.id)
     dragRef.current = {
       id: detection.id,
+      pointerId: event.pointerId,
+      moved: false,
       mode,
       startClientX: event.clientX,
       startClientY: event.clientY,
@@ -355,26 +388,39 @@ export function FloorPlan2DEditor({
     setIsDragging(true)
   }
 
+  function addObject(kind: "wall" | "door" | "window") {
+    const detection = createDetection(kind, imageSize)
+    const offset = (additionsRef.current++ % 6) * Math.max(12, imageSize.height * 0.035)
+    detection.box = clampBox(boxFromEdges(detection.box.x1, detection.box.y1 + offset, detection.box.x2, detection.box.y2 + offset), imageSize)
+    onAdd(detection)
+  }
+
+  const nameFor = (label: string) => ({ wall: "ผนัง", door: "ประตู", window: "หน้าต่าง", floor: "พื้น", ceiling: "ฝ้า", furniture: "เฟอร์นิเจอร์", object: "วัตถุ" }[labelKind(label)] ?? label)
+
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border bg-background/95 p-2 shadow-sm">
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" size="sm" variant="secondary" className="rounded-xl" onClick={() => onSelect(null)}>
-            <MousePointer2 className="mr-2 h-4 w-4" />เลือก
-          </Button>
-          <Button type="button" size="sm" variant="outline" className="rounded-xl" onClick={() => onAdd(createDetection("wall", imageSize))}>
-            <Plus className="mr-1 h-4 w-4" /><SquareDashed className="mr-2 h-4 w-4" />ผนัง
-          </Button>
-          <Button type="button" size="sm" variant="outline" className="rounded-xl" onClick={() => onAdd(createDetection("door", imageSize))}>
-            <Plus className="mr-1 h-4 w-4" /><DoorOpen className="mr-2 h-4 w-4" />ประตู
-          </Button>
-          <Button type="button" size="sm" variant="outline" className="rounded-xl" onClick={() => onAdd(createDetection("window", imageSize))}>
-            <Plus className="mr-1 h-4 w-4" /><PanelTop className="mr-2 h-4 w-4" />หน้าต่าง
-          </Button>
+    <div className="space-y-3" aria-label="เครื่องมือแก้ไขแปลน">
+      <div className="sticky top-2 z-30 space-y-3 rounded-2xl border border-border bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap gap-2" role="toolbar" aria-label="เพิ่มและแก้ไขวัตถุ">
+            <Button type="button" className="rounded-xl" onClick={() => addObject("wall")}><Plus className="h-4 w-4" /><SquareDashed className="h-4 w-4" />เพิ่มผนัง</Button>
+            <Button type="button" variant="outline" className="rounded-xl" onClick={() => addObject("door")}><Plus className="h-4 w-4" /><DoorOpen className="h-4 w-4" />เพิ่มประตู</Button>
+            <Button type="button" variant="outline" className="rounded-xl" onClick={() => addObject("window")}><Plus className="h-4 w-4" /><PanelTop className="h-4 w-4" />เพิ่มหน้าต่าง</Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={onUndo} disabled={!canUndo} aria-label="ย้อนกลับการแก้ไขแปลน"><Undo2 className="h-4 w-4" />ย้อนกลับ</Button>
+            <Button type="button" variant="outline" size="sm" onClick={onRedo} disabled={!canRedo} aria-label="ทำซ้ำการแก้ไขแปลน"><Redo2 className="h-4 w-4" />ทำซ้ำ</Button>
+            <Button type="button" variant="outline" size="sm" onClick={onOpenDetails} aria-expanded={detailsOpen}><SlidersHorizontal className="h-4 w-4" />รายละเอียด / ขนาดจริง</Button>
+          </div>
         </div>
-        <Button type="button" size="sm" variant="ghost" className="rounded-xl text-destructive hover:text-destructive" onClick={onDeleteSelected} disabled={!selected}>
-          <Trash2 className="mr-2 h-4 w-4" />ลบที่เลือก
-        </Button>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+          <p className="flex items-center gap-2 text-sm" role="status"><MousePointer2 className="h-4 w-4 shrink-0 text-primary" />{selected ? `เลือก${nameFor(selected.label)}แล้ว · ลากเพื่อย้าย หรือจับจุดเพื่อปรับขนาด` : `มี ${detections.length} วัตถุ · คลิกกรอบบนแปลนเพื่อเลือกและแก้ไข`}</p>
+          <Button type="button" variant={selected ? "destructive" : "outline"} size="sm" onClick={onDeleteSelected} disabled={!selected}><Trash2 className="h-4 w-4" />ลบวัตถุที่เลือก</Button>
+        </div>
+        <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
+          <label className="flex items-center gap-2"><input type="checkbox" checked={snapEnabled} onChange={e => setSnapEnabled(e.target.checked)} />ดูดตำแหน่งอัตโนมัติ</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={showLabels} onChange={e => setShowLabels(e.target.checked)} />แสดงชื่อทั้งหมด</label>
+          <span>Delete / Backspace = ลบ · Esc = ยกเลิกการลาก</span>
+        </div>
       </div>
 
       <div
@@ -383,7 +429,7 @@ export function FloorPlan2DEditor({
           if (event.target === event.currentTarget) onSelect(null)
         }}
       >
-        <div className="relative w-fit max-w-full">
+        <div className="relative w-fit max-w-full" data-testid="plan-edit-surface">
           <img
             ref={imageRef}
             src={imageUrl}
@@ -408,20 +454,26 @@ export function FloorPlan2DEditor({
                 key={detection.id}
                 role="button"
                 tabIndex={0}
-                aria-label={`เลือก ${detection.label}`}
+                aria-label={`เลือก${nameFor(detection.label)}`}
+                aria-pressed={isSelected}
+                data-object-id={detection.id}
                 onPointerDown={(event) => beginDrag(event, detection, "move")}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") onSelect(detection.id)
+                  if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onSelect(detection.id) }
                 }}
-                className={`absolute touch-none rounded-md border-2 transition-shadow ${isSelected ? "z-20 cursor-move ring-4 ring-white/80 shadow-xl" : "z-10 cursor-pointer"}`}
+                className={`absolute touch-none rounded-none border-2 transition-shadow ${isSelected ? "z-20 cursor-move ring-4 ring-white/80 shadow-xl" : "z-10 cursor-pointer"}`}
                 style={{
                   left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%`,
-                  minWidth: 8, minHeight: 8, borderColor: color, backgroundColor: `${color}20`,
+                  minWidth: 8, minHeight: 8, borderColor: detection.floorTiles ? "transparent" : color, backgroundColor: detection.floorTiles ? "transparent" : `${color}20`,
+                  ...(detection.floorTiles ? { pointerEvents: "none" as const, borderWidth: 0, boxShadow: "none" } : {}),
                 }}
               >
-                <span className="pointer-events-none absolute -top-6 left-0 whitespace-nowrap rounded-full px-2 py-[2px] text-[10px] font-medium text-white shadow-sm" style={{ backgroundColor: color }}>
-                  {detection.label} {Math.round(detection.confidence * 100)}%
-                </span>
+                {detection.floorTiles && <svg className="absolute inset-0 h-full w-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none">
+                  {detection.floorTiles.map((tile, index) => <rect key={index} x={tile.x1*100} y={tile.y1*100} width={(tile.x2-tile.x1)*100} height={(tile.y2-tile.y1)*100} fill={`${color}30`} stroke={isSelected ? color : "none"} strokeWidth="1" vectorEffect="non-scaling-stroke" style={{pointerEvents:"auto"}} />)}
+                </svg>}
+                {(isSelected || showLabels) && <span className="pointer-events-none absolute -top-6 left-0 whitespace-nowrap rounded-full px-2 py-[2px] text-[10px] font-medium text-white shadow-sm" style={{ backgroundColor: color }}>
+                  {detection.roomName ?? `${nameFor(detection.label)} ${Math.round(detection.confidence * 100)}%`}
+                </span>}
 
                 {isSelected && isWall && (
                   <>
@@ -454,7 +506,7 @@ export function FloorPlan2DEditor({
                       key={mode}
                       type="button"
                       aria-label={`Resize ${mode}`}
-                      className={`absolute h-4 w-4 rounded-full border-2 border-white shadow ${classes[mode]}`}
+                      className={`pointer-events-auto absolute h-4 w-4 rounded-full border-2 border-white shadow ${classes[mode]}`}
                       style={{ backgroundColor: color }}
                       onPointerDown={(event) => beginDrag(event, detection, mode)}
                     />
@@ -467,7 +519,7 @@ export function FloorPlan2DEditor({
       </div>
 
       <p className="px-1 text-xs leading-relaxed text-muted-foreground">
-        ผนังใช้จุดจับที่ปลายเพื่อปรับความยาวโดยไม่เปลี่ยนความหนา ระบบแม่เหล็กจะทำงานตอนปล่อยเมาส์เพื่อให้ลากได้ลื่นและไม่กระตุก
+        กดเพิ่มวัตถุแล้วลากไปยังตำแหน่งที่ต้องการ • จับจุดปลายผนังเพื่อปรับความยาว • เปิดดูดตำแหน่งได้เมื่อต้องการจัดแนว และกด Shift เพื่อข้ามชั่วคราว
       </p>
     </div>
   )

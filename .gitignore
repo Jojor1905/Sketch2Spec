@@ -32,3 +32,10 @@ __v0_jsx-dev-runtime.ts
 .snowflake/
 .v0-trash/
 .vercel/
+
+# Local QA output and generated caches
+backend/test_results/*
+!backend/test_results/.gitkeep
+tmp/
+*.tsbuildinfo
+*.log

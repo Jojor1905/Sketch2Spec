@@ -4,6 +4,7 @@ import nextVitals from "eslint-config-next/core-web-vitals"
 export default defineConfig([
   ...nextVitals,
   {
+    files: ["**/*.{js,jsx,ts,tsx,mjs}"],
     rules: {
       "react-hooks/refs": "off",
       "react-hooks/immutability": "off",
