@@ -16,7 +16,9 @@ const detection = z.object({
   objectHeightM: finite.nonnegative().optional(),
   roomBoundaryTolerancePx: finite.nonnegative().optional(),
   roomName: z.string().max(100).optional(),
-  floorTiles: z.array(z.object({x1: finite.min(0).max(1), y1: finite.min(0).max(1), x2: finite.min(0).max(1), y2: finite.min(0).max(1)}).refine(t => t.x2 > t.x1 && t.y2 > t.y1)).min(1).max(10000).optional(),
+  floorGroupId: z.string().optional(),
+  floorGroupName: z.string().max(100).optional(),
+  floorTiles: z.array(z.object({x1: finite.min(0).max(1), y1: finite.min(0).max(1), x2: finite.min(0).max(1), y2: finite.min(0).max(1), pieceId: z.string().optional(), pieceName: z.string().max(100).optional(), materialId: z.string().optional(), materialApplied: z.boolean().optional(), materialScale: finite.positive().optional(), materialRotation: finite.optional()}).refine(t => t.x2 > t.x1 && t.y2 > t.y1)).min(1).max(10000).optional(),
   wallFinishes: z.array(z.object({side: z.enum(["positive", "negative"]), start: finite.min(0).max(1), end: finite.min(0).max(1), materialId: z.string(), materialScale: finite.positive().optional(), materialRotation: finite.optional()}).refine(f => f.end > f.start)).max(2000).optional(),
 })
 

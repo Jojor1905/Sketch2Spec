@@ -671,6 +671,15 @@ export function calculateBudget(
       if (detection.materialApplied && detection.materialId) add(materialById(detection.materialId, "wall"), oneSideArea * Math.max(0, 2 - covered));
       return;
     }
+    if (target === "floor" && detection.floorTiles?.some(tile => tile.pieceId)) {
+      detection.floorTiles.forEach(tile => {
+        const materialId = tile.pieceId ? tile.materialId : detection.materialId;
+        const applied = tile.pieceId ? tile.materialApplied : detection.materialApplied;
+        if (applied && materialId) add(materialById(materialId, "floor"),
+          (tile.x2-tile.x1) * (tile.y2-tile.y1) * detection.box.width * detection.box.height * metersPerPixel * metersPerPixel);
+      });
+      return;
+    }
     // The initial generated model uses preview materials only. Add a BOQ line
     // after the user explicitly applies a finish to the object.
     if (detection.materialApplied !== true || !detection.materialId) return;

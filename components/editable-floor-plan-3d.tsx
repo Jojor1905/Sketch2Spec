@@ -44,7 +44,7 @@ import {
 } from "lucide-react"
 import { DoubleSide, MOUSE, TOUCH, Plane, PlaneGeometry, RepeatWrapping, SRGBColorSpace, Texture, TextureLoader, Vector2, Vector3 } from "three"
 
-import { inferRoomFloors, rebuildRoomFloors, removeDuplicateWalls } from "@/lib/floor-plan-repair"
+import { inferRoomFloors, rebuildRoomFloors, removeDuplicateWalls, splitFloorPieces, groupFloorPieces } from "@/lib/floor-plan-repair"
 import { WallPaintPicker, type RoomSurface } from "@/components/wall-paint-picker"
 import { paintWallFace, applyScopedMaterial, floorBoxes, overlapArea, roomWallFaces, type PaintScope } from "@/lib/rooms"
 import { Button } from "@/components/ui/button"
@@ -2038,7 +2038,18 @@ function FloorTileGeometry({tile, dimensions}: {tile: FloorTile; dimensions: Loc
   return <primitive object={geometry} attach="geometry" />
 }
 
-function FloorGeometry({
+function FloorGeometry(props: { tiles?: FloorTile[]; dimensions: LocalDimensions; selected: boolean; material: MaterialDefinition }) {
+  return <group>{(props.tiles ?? [{x1:0,y1:0,x2:1,y2:1}]).map((tile, index) => {
+    const base = tile.pieceId ? materialById(tile.materialId, "floor") : props.material
+    const material = tile.pieceId ? {...base,
+      textureScale: Math.max(0.25, base.textureScale * (tile.materialScale ?? 1)),
+      textureRotation: (base.textureRotation ?? 0) + (tile.materialRotation ?? 0),
+    } : base
+    return <FloorPieceGeometry key={index} {...props} tiles={[tile]} material={material} />
+  })}</group>
+}
+
+function FloorPieceGeometry({
   tiles,
   dimensions,
   selected,
@@ -4048,6 +4059,32 @@ export function EditableFloorPlan3D(props: Props) {
     showNotice(`แบ่งพื้นเป็น ${next.filter(d => d.floorTiles?.length).length} ห้องแล้ว · พื้นเดิมถูกแทนที่ · ย้อนกลับได้`)
   }
 
+  function selectWholeRoom() {
+    if (!selected) return
+    const next = groupFloorPieces(props.detections, selected.id)
+    if (next === props.detections) return
+    props.onCommit(next)
+    props.onSelect(selected.id)
+    setPaintRoomId("")
+    setPaintScope("selected")
+    setMaterialsOpen(false)
+    setBuildTool("select")
+    showNotice("เลือกทั้งห้องแล้ว · ย้ายและปรับขนาดพร้อมกัน · สลับกลับไปเลือกแยกชิ้นได้")
+  }
+
+  function splitSelectedFloor() {
+    if (!selected) return
+    const next = splitFloorPieces(props.detections, selected.id)
+    if (next === props.detections) return
+    props.onCommit(next)
+    props.onSelect(selected.id)
+    setPaintRoomId("")
+    setPaintScope("selected")
+    setMaterialsOpen(false)
+    setBuildTool("select")
+    showNotice("แยกพื้นแล้ว · คลิกเลือกและย้ายแต่ละชิ้นได้ · ย้อนกลับได้ด้วย Undo")
+  }
+
   function selectPaintSurface(surface: RoomSurface) {
     props.onSelect(surface.wallId)
     setSelectedWallSide(surface.side)
@@ -4110,7 +4147,7 @@ export function EditableFloorPlan3D(props: Props) {
           ? (highlightedFaces[item.id] ?? []).reduce((wall,face)=>{
               return (item.wallFinishes ?? []).filter(f=>f.side===face.side && f.end>face.start && f.start<face.end).reduce((next,f)=>paintWallFace(next,{...f,...patch,start:Math.max(f.start,face.start),end:Math.min(f.end,face.end)}),wall)
             },item)
-          : { ...item, ...patch }) : item,
+          : { ...item, ...patch, floorTiles: item.floorTiles?.map(tile => tile.pieceId ? {...tile, ...patch} : tile) }) : item,
       ),
     )
   }
@@ -4200,6 +4237,9 @@ export function EditableFloorPlan3D(props: Props) {
     let copy: Detection = {
       ...selected,
       id: makeDetectionId(labelKind(selected.label)),
+      floorGroupId: undefined,
+      floorGroupName: undefined,
+      floorTiles: selected.floorTiles?.map(tile => ({...tile, pieceId: tile.pieceId ? makeDetectionId("floor") : undefined})),
       confidence: 1,
       box: nextBox,
     }
@@ -4446,6 +4486,13 @@ export function EditableFloorPlan3D(props: Props) {
       </div>
       <div className="flex flex-wrap items-center gap-2 border-t bg-white px-4 py-2">
         <Button size="sm" variant="outline" onClick={rebuildRooms}>แบ่งพื้นตามห้อง</Button>
+        {selected && labelKind(selected.label) === "floor" && (
+          <div role="group" aria-label="รูปแบบการเลือกพื้น" className="flex items-center gap-1 rounded-lg border p-1">
+            <span className="px-1 text-xs">เลือกพื้น</span>
+            <Button size="sm" variant={(selected.floorTiles?.length ?? 0) > 1 ? "default" : "ghost"} aria-pressed={(selected.floorTiles?.length ?? 0) > 1} disabled={!props.detections.some(d => d.id !== selected.id && d.floorGroupId && d.floorGroupId === selected.floorGroupId && labelKind(d.label) === "floor")} onClick={selectWholeRoom}>ทั้งห้อง</Button>
+            <Button size="sm" variant={(selected.floorTiles?.length ?? 0) <= 1 ? "default" : "ghost"} aria-pressed={(selected.floorTiles?.length ?? 0) <= 1} disabled={(selected.floorTiles?.length ?? 0) <= 1} onClick={splitSelectedFloor}>แยกชิ้น</Button>
+          </div>
+        )}
         <span className="text-[11px] text-muted-foreground">{rooms.length ? `${rooms.length} ห้อง · แก้ผนังแล้วกดแบ่งใหม่` : "งานเดิม: กดเพื่อแก้พื้นซ้อน · ย้อนกลับได้"}</span>
         <label className="text-xs font-medium">เลือกชิ้นงาน
           <select aria-label="เลือกวัตถุในโมเดล" className="ml-2 max-w-[220px] rounded-lg border px-2 py-1" value={props.selectedId ?? ""} onChange={(event) => {

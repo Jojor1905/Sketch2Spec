@@ -7,7 +7,7 @@ export type DetectionBox = {
   height: number
 }
 
-export type FloorTile = { x1: number; y1: number; x2: number; y2: number }
+export type FloorTile = { x1: number; y1: number; x2: number; y2: number; pieceId?: string; pieceName?: string; materialId?: string; materialApplied?: boolean; materialScale?: number; materialRotation?: number }
 export type WallSide = "positive" | "negative"
 export type WallFinish = { side: WallSide; start: number; end: number; materialId: string; materialScale?: number; materialRotation?: number }
 
@@ -31,6 +31,8 @@ export type Detection = {
   roomBoundaryTolerancePx?: number
   roomName?: string
   floorTiles?: FloorTile[]
+  floorGroupId?: string
+  floorGroupName?: string
   wallFinishes?: WallFinish[]
   objectHeightM?: number
 }
@@ -63,6 +65,8 @@ export function normalizeDetection(
 
   return {
     roomName: detection.roomName,
+    floorGroupId: detection.floorGroupId,
+    floorGroupName: detection.floorGroupName,
     roomBoundaryTolerancePx: detection.roomBoundaryTolerancePx,
     floorTiles: detection.floorTiles?.map(tile => ({ ...tile })),
     wallFinishes: detection.wallFinishes?.map(finish => ({ ...finish })),

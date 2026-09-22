@@ -61,7 +61,7 @@ export function applyScopedMaterial(detections: Detection[], target: string, mat
     if (labelKind(d.label)!==target) return d
     if (scope === "room") {
       if (!room) return d
-      if (target === "floor") return d.id===room.id ? {...d, materialId, materialApplied:true} : d
+      if (target === "floor") return d.id===room.id ? {...d, materialId, materialApplied:true, floorTiles: d.floorTiles?.map(t=>t.pieceId ? {...t,materialId,materialApplied:true} : t)} : d
       if (target === "wall") return roomWallFaces(room,d).reduce((wall,face)=>paintWallFace(wall,{...face,materialId}),d)
       return d
     }
@@ -74,7 +74,7 @@ export function applyScopedMaterial(detections: Detection[], target: string, mat
       if (contacts.length && !face) return d
       return paintWallFace(d,{...(face ?? {side,start:0,end:1}),materialId})
     }
-    return {...d,materialId,materialApplied:true,...(target === "wall" ? {wallFinishes:[]} : {})}
+    return {...d,materialId,materialApplied:true,floorTiles:d.floorTiles?.map(t=>t.pieceId ? {...t,materialId,materialApplied:true} : t),...(target === "wall" ? {wallFinishes:[]} : {})}
   })
 }
 

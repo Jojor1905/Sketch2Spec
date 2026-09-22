@@ -1,6 +1,52 @@
 import { floorBoxes, overlapArea } from "./rooms"
 import { boxFromEdges, labelKind, makeDetectionId, type Detection, type ImageSize } from "./floor-plan"
 
+/** Split only the requested tiled floor, preserving its occupied area and finish. */
+export function splitFloorPieces(detections: Detection[], selectedId: string): Detection[] {
+  const floor = detections.find(item => item.id === selectedId)
+  if (!floor || labelKind(floor.label) !== "floor" || !floor.floorTiles || floor.floorTiles.length < 2) return detections
+  const groupId = makeDetectionId("floor-group")
+  const pieces = floor.floorTiles.map((tile, index) => ({
+    ...floor,
+    id: tile.pieceId ?? (index === 0 ? floor.id : makeDetectionId("floor")),
+    roomName: tile.pieceName ?? `${(floor.roomName ?? "พื้น").slice(0, 80)} · ชิ้น ${index + 1}`,
+    floorGroupId: floor.floorGroupId ?? groupId,
+    floorGroupName: floor.floorGroupName ?? floor.roomName ?? "ห้อง",
+    materialId: tile.pieceId ? tile.materialId : floor.materialId,
+    materialApplied: tile.pieceId ? tile.materialApplied : floor.materialApplied,
+    materialScale: tile.pieceId ? tile.materialScale : floor.materialScale,
+    materialRotation: tile.pieceId ? tile.materialRotation : floor.materialRotation,
+    box: boxFromEdges(
+      floor.box.x1 + tile.x1 * floor.box.width,
+      floor.box.y1 + tile.y1 * floor.box.height,
+      floor.box.x1 + tile.x2 * floor.box.width,
+      floor.box.y1 + tile.y2 * floor.box.height,
+    ),
+    floorTiles: [{ x1: 0, y1: 0, x2: 1, y2: 1 }],
+  }))
+  return detections.flatMap(item => item.id === selectedId ? pieces : [item])
+}
+
+/** Rejoin only members of the selected room, using their current positions. */
+export function groupFloorPieces(detections: Detection[], selectedId: string): Detection[] {
+  const selected = detections.find(item => item.id === selectedId)
+  if (!selected?.floorGroupId || labelKind(selected.label) !== "floor") return detections
+  const members = detections.filter(item => labelKind(item.label) === "floor" && item.floorGroupId === selected.floorGroupId)
+  if (members.length < 2) return detections
+  const box = boxFromEdges(Math.min(...members.map(d=>d.box.x1)), Math.min(...members.map(d=>d.box.y1)), Math.max(...members.map(d=>d.box.x2)), Math.max(...members.map(d=>d.box.y2)))
+  const grouped: Detection = {...selected, box, roomName: selected.floorGroupName ?? "ห้อง", floorTiles: members.flatMap(member => floorBoxes(member).map((part, index) => ({
+    x1:(part.x1-box.x1)/box.width, y1:(part.y1-box.y1)/box.height,
+    x2:(part.x2-box.x1)/box.width, y2:(part.y2-box.y1)/box.height,
+    pieceId: member.floorTiles?.[index]?.pieceId ?? (index === 0 ? member.id : makeDetectionId("floor")),
+    pieceName: member.floorTiles?.[index]?.pieceName ?? member.roomName,
+    materialId: member.floorTiles?.[index]?.materialId ?? member.materialId,
+    materialApplied: member.floorTiles?.[index]?.materialApplied ?? member.materialApplied,
+    materialScale: member.floorTiles?.[index]?.materialScale ?? member.materialScale,
+    materialRotation: member.floorTiles?.[index]?.materialRotation ?? member.materialRotation,
+  })))}
+  return detections.flatMap(item => item.id === selectedId ? [grouped] : members.includes(item) ? [] : [item])
+}
+
 /** Conservative duplicate removal: retain the higher-confidence box, never merge different finishes. */
 export function removeDuplicateWalls(detections: Detection[]): Detection[] {
   const kept: Detection[] = []
