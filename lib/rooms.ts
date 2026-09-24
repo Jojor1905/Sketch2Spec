@@ -12,31 +12,102 @@ export function overlapArea(a: DetectionBox[], b: DetectionBox[]) {
   return total
 }
 
-/** Surface intervals facing this room. Bounding boxes alone are never used for concave rooms. */
+/** Surface intervals facing this room.
+ * 
+ * The previous implementation required the floor edge to be almost exactly on
+ * the wall edge (0.001 px by default). AI-generated walls/floors are rarely
+ * that exact, so a room could report only 1–2 wall faces even when the room
+ * visibly had four walls. This version uses a bounded, wall-thickness-aware
+ * tolerance and determines the face from the tile's side of the wall.
+ */
 export function roomWallFaces(room: Detection, wall: Detection): {side: WallSide; start:number; end:number}[] {
   if (labelKind(wall.label) !== "wall") return []
-  const b = wall.box, horizontal = b.width >= b.height
+
+  const b = wall.box
+  const horizontal = b.width >= b.height
   const length = horizontal ? b.width : b.height
   if (length <= 0) return []
-  const tolerance = Math.min(Math.max(0.001, room.roomBoundaryTolerancePx ?? 0.001), Math.min(b.width,b.height)*0.2)
+
+  // Match the small geometric errors introduced by detection / resizing, but
+  // keep the tolerance bounded so a nearby neighbouring wall is not captured.
+  const wallThickness = Math.max(1, Math.min(b.width, b.height))
+  const configuredTolerance = Number(room.roomBoundaryTolerancePx ?? 0)
+  const tolerance = Math.min(
+    14,
+    Math.max(6, Number.isFinite(configuredTolerance) ? configuredTolerance : 0, wallThickness),
+  )
+
   const contacts: {side: WallSide; start:number; end:number}[] = []
+
   for (const tile of floorBoxes(room)) {
-    const lo = Math.max(horizontal ? b.x1 : b.y1, horizontal ? tile.x1 : tile.y1)
-    const hi = Math.min(horizontal ? b.x2 : b.y2, horizontal ? tile.x2 : tile.y2)
+    const lo = Math.max(
+      horizontal ? b.x1 : b.y1,
+      horizontal ? tile.x1 : tile.y1,
+    )
+    const hi = Math.min(
+      horizontal ? b.x2 : b.y2,
+      horizontal ? tile.x2 : tile.y2,
+    )
     if (hi <= lo) continue
-    for (const side of ["negative","positive"] as const) {
-      const edge = horizontal ? (side === "negative" ? b.y1 : b.y2) : (side === "negative" ? b.x1 : b.x2)
-      const roomEdge = horizontal ? (side === "negative" ? tile.y2 : tile.y1) : (side === "negative" ? tile.x2 : tile.x1)
-      if ((side === "negative" ? roomEdge <= edge+1e-6 : roomEdge >= edge-1e-6) && Math.abs(edge-roomEdge) <= tolerance) contacts.push({side,start:(lo-(horizontal?b.x1:b.y1))/length,end:(hi-(horizontal?b.x1:b.y1))/length})
+
+    const roomCenter = horizontal
+      ? (tile.y1 + tile.y2) / 2
+      : (tile.x1 + tile.x2) / 2
+    const wallCenter = horizontal
+      ? (b.y1 + b.y2) / 2
+      : (b.x1 + b.x2) / 2
+
+    const negativeWallEdge = horizontal ? b.y1 : b.x1
+    const positiveWallEdge = horizontal ? b.y2 : b.x2
+    const negativeRoomEdge = horizontal ? tile.y2 : tile.x2
+    const positiveRoomEdge = horizontal ? tile.y1 : tile.x1
+
+    const negativeGap = Math.abs(negativeRoomEdge - negativeWallEdge)
+    const positiveGap = Math.abs(positiveRoomEdge - positiveWallEdge)
+
+    let side: WallSide | null = null
+
+    // Prefer the geometrically nearer side, while also requiring the tile center
+    // to lie on that side of the wall. This prevents a neighbouring wall on the
+    // opposite side from being selected just because its edge is close.
+    if (
+      roomCenter <= wallCenter &&
+      negativeGap <= tolerance &&
+      negativeGap <= positiveGap
+    ) {
+      side = "negative"
+    } else if (
+      roomCenter >= wallCenter &&
+      positiveGap <= tolerance &&
+      positiveGap <= negativeGap
+    ) {
+      side = "positive"
+    } else {
+      // Fallback for slightly overlapping/offset AI geometry.
+      if (negativeGap <= tolerance && negativeGap < positiveGap) side = "negative"
+      else if (positiveGap <= tolerance) side = "positive"
     }
+
+    if (!side) continue
+
+    const alongStart = horizontal ? b.x1 : b.y1
+    contacts.push({
+      side,
+      start: (lo - alongStart) / length,
+      end: (hi - alongStart) / length,
+    })
   }
+
   // Adjacent tiles of the same L-shaped room share one continuous finish interval.
   const result: typeof contacts = []
   for (const side of ["negative","positive"] as const) {
     for (const c of contacts.filter(c => c.side === side).sort((a,b) => a.start-b.start)) {
       const last = result.at(-1)
-      if (last?.side === side && c.start <= last.end+1e-6) last.end = Math.max(last.end,c.end)
-      else result.push({...c})
+      if (last?.side === side && c.start <= last.end + 1e-6) {
+        last.end = Math.max(last.end, c.end)
+      } else {
+        result.push({...c})
+      }
     }
   }
   return result
