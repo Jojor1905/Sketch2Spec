@@ -9,6 +9,7 @@ import {
   CircleHelp,
   Copy,
   DoorOpen,
+  Footprints,
   Eye,
   EyeOff,
   Grid2X2,
@@ -47,7 +48,18 @@ import { DoubleSide, MOUSE, TOUCH, Plane, PlaneGeometry, RepeatWrapping, SRGBCol
 
 import { inferRoomFloors, rebuildRoomFloors, removeDuplicateWalls } from "@/lib/floor-plan-repair"
 import { WallPaintPicker, type RoomSurface } from "@/components/wall-paint-picker"
+import { EditorToolRail } from "@/components/workspace/editor-tool-rail"
+import { FocusToolbar } from "@/components/workspace/focus-toolbar"
+import { FurnitureCatalog } from "@/components/workspace/furniture-catalog"
+import { ObjectContextMenu } from "@/components/workspace/object-context-menu"
+import { FurniturePrefab } from "@/components/furniture-prefab"
+import { WalkController } from "@/components/workspace/walk-controller"
 import { paintWallFace, applyScopedMaterial, floorBoxes, overlapArea, roomWallFaces, type PaintScope } from "@/lib/rooms"
+import { resolveWallSurface, wallPositionFromHit, wallSideFromNormal, type SurfaceRayHit } from "@/lib/surface-selection"
+import { findNearestWall, DOOR_HEIGHT_M as DOOR_HEIGHT, WINDOW_SILL_M as WINDOW_SILL, WINDOW_TOP_M as WINDOW_TOP } from "@/lib/openings"
+import { furnitureCatalogItem, furnitureInstanceOf, furnitureDimensionsOf, makeFurnitureDetection, resizeFurnitureUniform, type FurnitureCatalogItem } from "@/lib/furniture"
+import { contextEntityFor, type ContextAction } from "@/lib/context-actions"
+import { resizeWallThicknessAroundCenter as resizeWallThicknessBox } from "@/lib/wall-thickness"
 import { Button } from "@/components/ui/button"
 import {
   calculateBudget,
@@ -74,9 +86,10 @@ import {
   type FloorTile,
   type WallSide,
   type ImageSize,
+  worldScaleFor,
 } from "@/lib/floor-plan"
 
-type BuildTool = "orbit" | "select" | "wall" | "room" | "floor" | "ceiling" | "furniture" | "door" | "window"
+type BuildTool = "orbit" | "walk" | "select" | "wall" | "room" | "floor" | "ceiling" | "furniture" | "door" | "window"
 type EditAction = "select" | "move" | "resize" | "material"
 type EditorView = "plan" | "perspective"
 type SnapMode = "smart" | "grid" | "free"
@@ -103,17 +116,21 @@ type DragOperation =
   | "resize-se"
 
 type Props = {
+  focusMode?: boolean
+  onExitFocus?: () => void
+  onSwitchWorkspace?: (view: "2d" | "3d") => void
   imageUrl: string | null
   detections: Detection[]
   imageSize: ImageSize
   previewDataUrl?: string
   highlightedFaces?: Record<string, {side: WallSide; start:number; end:number}[]>
+  selectedFace?: { wallId: string; side: WallSide; start: number; end: number }
   highlightedRoomId?: string
   selectedId: string | null
   metersPerPixel: number | null
   floorMaterialId: string
   onFloorMaterialChange: (materialId: string) => void
-  onSelect: (id: string | null, side?: WallSide, position?: number) => void
+  onSelect: (id: string | null, side?: WallSide, position?: number, hit?: SurfaceRayHit) => void
   onLiveChange: (detections: Detection[]) => void
   onCommit: (detections: Detection[]) => void
   onDeleteSelected: () => void
@@ -124,9 +141,6 @@ type Props = {
 }
 
 const DEFAULT_WALL_HEIGHT = 2.8
-const DOOR_HEIGHT = 2.1
-const WINDOW_SILL = 0.95
-const WINDOW_TOP = 2.15
 const MIN_MAJOR_SIZE_PX = 8
 const MIN_FLOOR_SIZE_PX = 12
 const DRAG_PLANE = new Plane(new Vector3(0, 1, 0), 0)
@@ -322,6 +336,16 @@ function formatMoney(value: number) {
   }).format(value)
 }
 
+function referencePrice(material: MaterialDefinition) {
+  const product = material.product
+  if (!product) return `Demo estimate ${formatMoney(material.price ?? 0)}/${material.unit}`
+  const unit = { piece: "ชิ้น", box: "กล่อง", m2: "m²", set: "ชุด" }[product.sellUnit]
+  if (product.referencePrice !== undefined) return `Reference price ${formatMoney(product.referencePrice)}/${unit}`
+  if (product.priceMin !== undefined && product.priceMax !== undefined)
+    return `Reference price ${formatMoney(product.priceMin)}–${formatMoney(product.priceMax)}/${unit}`
+  return "Price unavailable"
+}
+
 function wallThicknessPx(box: DetectionBox) {
   return orientationOf(box) === "horizontal" ? box.height : box.width
 }
@@ -433,29 +457,6 @@ function snapPointForMode(
   return snapPoint(point, detections, imageSize)
 }
 
-function resizeWallThicknessBox(
-  box: DetectionBox,
-  targetThicknessPx: number,
-  imageSize: ImageSize,
-) {
-  const safeThickness = Math.max(4, Math.min(targetThicknessPx, Math.max(imageSize.width, imageSize.height)))
-  const center = centerOf(box)
-
-  if (orientationOf(box) === "horizontal") {
-    return clampBox(
-      boxFromEdges(box.x1, center.y - safeThickness / 2, box.x2, center.y + safeThickness / 2),
-      imageSize,
-      4,
-    )
-  }
-
-  return clampBox(
-    boxFromEdges(center.x - safeThickness / 2, box.y1, center.x + safeThickness / 2, box.y2),
-    imageSize,
-    4,
-  )
-}
-
 function parseThicknessInput(
   rawValue: string,
   metersPerPixel: number | null,
@@ -476,39 +477,12 @@ function centerOf(box: DetectionBox) {
   }
 }
 
-function worldScaleFor(imageSize: ImageSize) {
-  return 14 / Math.max(imageSize.width, imageSize.height, 1)
-}
-
-function worldPointToImage(point: Vector3, imageSize: ImageSize) {
-  const scale = worldScaleFor(imageSize)
+function worldPointToImage(point: Vector3, imageSize: ImageSize, metersPerPixel: number | null) {
+  const scale = worldScaleFor(imageSize,metersPerPixel)
   return {
     x: Math.min(imageSize.width, Math.max(0, point.x / scale + imageSize.width / 2)),
     y: Math.min(imageSize.height, Math.max(0, point.z / scale + imageSize.height / 2)),
   }
-}
-
-function distancePointToBox(x: number, y: number, box: DetectionBox) {
-  const dx = Math.max(box.x1 - x, 0, x - box.x2)
-  const dy = Math.max(box.y1 - y, 0, y - box.y2)
-  return Math.hypot(dx, dy)
-}
-
-function findNearestWall(opening: Detection, walls: Detection[], imageSize: ImageSize) {
-  const center = centerOf(opening.box)
-  const threshold = Math.max(18, Math.max(imageSize.width, imageSize.height) * 0.07)
-  let nearest: Detection | null = null
-  let nearestDistance = Number.POSITIVE_INFINITY
-
-  for (const wall of walls) {
-    const distance = distancePointToBox(center.x, center.y, wall.box)
-    if (distance < nearestDistance) {
-      nearestDistance = distance
-      nearest = wall
-    }
-  }
-
-  return nearestDistance <= threshold ? nearest : null
 }
 
 function snapOpeningToWall(opening: Detection, wall: Detection, imageSize: ImageSize): Detection {
@@ -1701,12 +1675,14 @@ function CameraController({
   nonce,
   selected,
   imageSize,
+  metersPerPixel,
   controlsRef,
 }: {
   command: CameraCommand
   nonce: number
   selected: Detection | null
   imageSize: ImageSize
+  metersPerPixel: number | null
   controlsRef: React.MutableRefObject<any>
 }) {
   const { camera, size } = useThree()
@@ -1721,11 +1697,10 @@ function CameraController({
     const previous = lastCommandRef.current
     const repeatedCommand = previous?.command === command && previous.nonce === nonce
     lastCommandRef.current = { command, nonce }
-    // Layout changes may refit a standard view, but never replay a zoom,
-    // rotation or focus action that the user already performed.
-    if (repeatedCommand && !["home", "plan", "top"].includes(command)) return
+    // Resizing the workspace must not reset a camera the user has positioned.
+    if (repeatedCommand) return
     const activeSelected = selectedRef.current
-    const worldScale = worldScaleFor(imageSize)
+    const worldScale = worldScaleFor(imageSize,metersPerPixel)
     const floorWidth = imageSize.width * worldScale
     const floorDepth = imageSize.height * worldScale
     // Include the horizontal field of view when the editor is narrow.
@@ -1785,7 +1760,7 @@ function CameraController({
       controlsRef.current.target.copy(target)
       controlsRef.current.update()
     }
-  }, [camera, command, controlsRef, imageSize, nonce, size.width, size.height])
+  }, [camera, command, controlsRef, imageSize, metersPerPixel, nonce, size.width, size.height])
 
   return null
 }
@@ -1841,20 +1816,22 @@ function WallFaceMaterial({ material, width, height }: { material: MaterialDefin
 
 function WallGeometry({
   faceHighlights,
+  selectedFace,
+  hoveredSide,
   detection,
   openings,
   dimensions,
   worldScale,
-  selected,
   wallHeight,
   material,
 }: {
   faceHighlights?: {side: WallSide; start:number; end:number}[]
+  selectedFace?: {side: WallSide; start: number; end: number}
+  hoveredSide?: WallSide | null
   detection: Detection
   openings: Detection[]
   dimensions: LocalDimensions
   worldScale: number
-  selected: boolean
   wallHeight: number
   material: MaterialDefinition
 }) {
@@ -1866,6 +1843,7 @@ function WallGeometry({
   cuts.forEach((cut) => boundaries.push(cut.start, cut.end))
   detection.wallFinishes?.forEach(f => boundaries.push((f.start-0.5)*majorLength,(f.end-0.5)*majorLength))
   faceHighlights?.forEach(f => boundaries.push((f.start-0.5)*majorLength,(f.end-0.5)*majorLength))
+  if (selectedFace) boundaries.push((selectedFace.start-0.5)*majorLength,(selectedFace.end-0.5)*majorLength)
   const sorted = Array.from(
     new Set(boundaries.map((value) => Number(value.toFixed(5)))),
   ).sort((a, b) => a - b)
@@ -1894,7 +1872,17 @@ function WallGeometry({
       const fraction = localMajor / majorLength + 0.5
       const finish = detection.wallFinishes?.find(f => f.side === side && fraction >= f.start && fraction <= f.end)
       const highlight = faceHighlights?.some(f=>f.side===side && fraction>f.start && fraction<f.end)
+      const selectedSurface = selectedFace?.side === side && fraction >= selectedFace.start && fraction <= selectedFace.end
+      const hoverSurface = hoveredSide === side && !selectedSurface
       const sign = side === "positive" ? 1 : -1
+      if (selectedSurface || hoverSurface) {
+        const accent = selectedSurface ? "#b91c1c" : "#64748b"
+        segmentMeshes.push(<mesh key={`${key}-${side}-selection`} raycast={() => {}} position={orientation === "horizontal" ? [localMajor,y,sign*(minorLength/2+0.012)] : [sign*(minorLength/2+0.012),y,localMajor]} rotation={[0,orientation === "horizontal" ? (sign===1?0:Math.PI) : sign*Math.PI/2,0]}>
+          <planeGeometry args={[length,height]} />
+          <meshBasicMaterial color={accent} transparent opacity={selectedSurface ? 0.12 : 0.07} depthWrite={false} polygonOffset polygonOffsetFactor={-3} />
+          <Edges color={accent} raycast={() => {}} />
+        </mesh>)
+      }
       if (highlight) segmentMeshes.push(<mesh key={`${key}-${side}-highlight`} raycast={() => {}} position={orientation === "horizontal" ? [localMajor,y,sign*(minorLength/2+0.006)] : [sign*(minorLength/2+0.006),y,localMajor]} rotation={[0,orientation === "horizontal" ? (sign===1?0:Math.PI) : sign*Math.PI/2,0]}>
         <planeGeometry args={[length,height]} />
         <meshBasicMaterial color="#a855f7" transparent opacity={0.18} depthWrite={false} polygonOffset polygonOffsetFactor={-2} />
@@ -1922,8 +1910,8 @@ function WallGeometry({
           roughness={material.roughness}
           metalness={material.metalness}
           clearcoat={material.clearcoat ?? 0}
-          emissive={selected ? material.color : "#000000"}
-          emissiveIntensity={selected ? 0.18 : 0}
+          emissive="#000000"
+          emissiveIntensity={0}
         />
       </mesh>,
     )
@@ -1976,11 +1964,13 @@ function OpeningGeometry({
   detection,
   dimensions,
   selected,
+  hovered,
   material,
 }: {
   detection: Detection
   dimensions: LocalDimensions
   selected: boolean
+  hovered: boolean
   material: MaterialDefinition
 }) {
   const kind = labelKind(detection.label)
@@ -2023,7 +2013,7 @@ function OpeningGeometry({
       />
       <Edges
         threshold={10}
-        color={selected ? "#0F65D8" : kind === "door" ? "#93683F" : "#269BB7"}
+        color={selected ? "#C22828" : hovered ? "#7C91AA" : kind === "door" ? "#93683F" : "#269BB7"}
       />
     </mesh>
   )
@@ -2044,11 +2034,13 @@ function FloorGeometry({
   tiles,
   dimensions,
   selected,
+  hovered,
   material,
 }: {
   tiles?: FloorTile[]
   dimensions: LocalDimensions
   selected: boolean
+  hovered: boolean
   material: MaterialDefinition
 }) {
   const textureBundle = useMaterialTextureBundle(
@@ -2075,7 +2067,7 @@ function FloorGeometry({
           emissive={selected ? material.color : "#000000"}
           emissiveIntensity={selected ? 0.12 : 0}
         />
-        {selected && <Edges color="#7C3AED" threshold={1} />}
+        {(selected || hovered) && <Edges color={selected ? "#C22828" : "#7C91AA"} threshold={1} />}
       </mesh>)}
 
     </group>
@@ -2085,11 +2077,13 @@ function FloorGeometry({
 function CeilingGeometry({
   dimensions,
   selected,
+  hovered,
   material,
   height,
 }: {
   dimensions: LocalDimensions
   selected: boolean
+  hovered: boolean
   material: MaterialDefinition
   height: number
 }) {
@@ -2121,11 +2115,11 @@ function CeilingGeometry({
           emissiveIntensity={selected ? 0.1 : 0}
         />
       </mesh>
-      {selected && (
+      {(selected || hovered) && (
         <mesh position={[0, height, 0]} renderOrder={25}>
           <boxGeometry args={[dimensions.width + 0.05, 0.05, dimensions.depth + 0.05]} />
           <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-          <Edges color="#7C3AED" threshold={1} />
+          <Edges color={selected ? "#C22828" : "#7C91AA"} threshold={1} />
         </mesh>
       )}
     </group>
@@ -2207,7 +2201,7 @@ function DraftWall({
   showEndpoints?: boolean
   showLabel?: boolean
 }) {
-  const worldScale = worldScaleFor(imageSize)
+  const worldScale = worldScaleFor(imageSize,metersPerPixel)
   const orientation = orientationOf(detection.box)
   const center = centerOf(detection.box)
   const centerX = (center.x - imageSize.width / 2) * worldScale
@@ -2266,7 +2260,7 @@ function DraftFloor({
   imageSize: ImageSize
   metersPerPixel: number | null
 }) {
-  const worldScale = worldScaleFor(imageSize)
+  const worldScale = worldScaleFor(imageSize,metersPerPixel)
   const center = centerOf(detection.box)
   const centerX = (center.x - imageSize.width / 2) * worldScale
   const centerZ = (center.y - imageSize.height / 2) * worldScale
@@ -2305,6 +2299,10 @@ function DraftFloor({
 
 function InteractiveObject({
   faceHighlights,
+  selectedFace,
+  walkHoveredSide,
+  walkHovered,
+  walkSelected,
   detection,
   allDetections,
   imageSize,
@@ -2331,6 +2329,10 @@ function InteractiveObject({
   detection: Detection
   allDetections: Detection[]
   faceHighlights?: {side: WallSide; start:number; end:number}[]
+  selectedFace?: {side: WallSide; start: number; end: number}
+  walkHoveredSide?: WallSide
+  walkHovered?: boolean
+  walkSelected?: boolean
   imageSize: ImageSize
   selected: boolean
   buildTool: BuildTool
@@ -2343,7 +2345,7 @@ function InteractiveObject({
   snapMode: SnapMode
   gridStepPx: number
   wallViewMode: WallViewMode
-  onSelect: (side?: WallSide, position?: number) => void
+  onSelect: (side?: WallSide, position?: number, hit?: SurfaceRayHit) => void
   onLiveChange: (detections: Detection[]) => void
   onCommit: (detections: Detection[]) => void
   onDragging: (dragging: boolean) => void
@@ -2357,6 +2359,10 @@ function InteractiveObject({
   onFinishWallDrawing: (event: ThreeEvent<PointerEvent>) => void
 }) {
   const { camera } = useThree()
+  const [hoveredSide, setHoveredSide] = useState<WallSide | null>(null)
+  const [hovered, setHovered] = useState(false)
+  const visualSelected = selected || Boolean(walkSelected)
+  const visualHovered = !visualSelected && (hovered || Boolean(walkHovered))
   const detectionsRef = useRef(allDetections)
   const latestRef = useRef(allDetections)
   const dragRef = useRef<{
@@ -2380,8 +2386,10 @@ function InteractiveObject({
     if (!dragRef.current) latestRef.current = allDetections
   }, [allDetections])
 
-  const worldScale = worldScaleFor(imageSize)
+  const worldScale = worldScaleFor(imageSize,metersPerPixel)
   const kind = labelKind(detection.label)
+  const furnitureItem = kind === "furniture" ? furnitureCatalogItem(detection.furnitureCatalogId) : null
+  const furnitureInstance = furnitureItem ? furnitureInstanceOf(detection, imageSize, metersPerPixel) : null
   const materialTarget = targetForDetection(detection)
   const baseMaterial = materialById(detection.materialId, materialTarget ?? "wall")
   const material = useMemo(
@@ -2467,23 +2475,28 @@ function InteractiveObject({
 
   function positionAt(event: ThreeEvent<PointerEvent | MouseEvent>) {
     if (kind !== "wall") return undefined
-    const coordinate = orientation === "horizontal" ? event.point.x/worldScale+imageSize.width/2 : event.point.z/worldScale+imageSize.height/2
-    const start = orientation === "horizontal" ? detection.box.x1 : detection.box.y1
-    const length = orientation === "horizontal" ? detection.box.width : detection.box.height
-    return Math.max(0,Math.min(1,(coordinate-start)/length))
+    return wallPositionFromHit(detection, event.point, imageSize, worldScale)
   }
 
   function sideAt(event: ThreeEvent<PointerEvent | MouseEvent>): WallSide | undefined {
     if (kind !== "wall" || !event.face) return undefined
     const normal = event.face.normal.clone().transformDirection(event.object.matrixWorld)
-    const value = orientation === "horizontal" ? normal.z : normal.x
-    return Math.abs(value) > 0.5 ? (value > 0 ? "positive" : "negative") : undefined
+    return wallSideFromNormal(detection, normal) ?? undefined
+  }
+
+  function hitAt(event: ThreeEvent<PointerEvent | MouseEvent>): SurfaceRayHit {
+    const normal = event.face?.normal.clone().transformDirection(event.object.matrixWorld)
+    return {
+      point: { x: event.point.x, y: event.point.y, z: event.point.z },
+      normal: normal ? { x: normal.x, y: normal.y, z: normal.z } : undefined,
+      uv: event.uv ? { x: event.uv.x, y: event.uv.y } : undefined,
+    }
   }
 
   function beginDrag(event: ThreeEvent<PointerEvent>, operation: DragOperation) {
     if (event.button !== 0) return
     event.stopPropagation()
-    onSelect(sideAt(event), positionAt(event))
+    onSelect(sideAt(event), positionAt(event), hitAt(event))
 
     // A fixed ground plane works in top view, but in perspective the ray hits
     // y=0 far behind the handle. That makes the wall jump or stretch in the
@@ -2805,7 +2818,10 @@ function InteractiveObject({
       finalizeDrag(undefined, false)
     }
     function onEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") cancelInteraction()
+      if (event.key === "Escape" && dragRef.current) {
+        event.preventDefault()
+        cancelInteraction()
+      }
     }
 
     window.addEventListener("pointerup", onWindowPointerUp)
@@ -2854,11 +2870,11 @@ function InteractiveObject({
   return (
     <group
       position={[centerX, 0, centerZ]}
-      userData={{ editorKind: kind }}
+      userData={{ editorKind: kind, editorId: detection.id }}
       onClick={(event) => {
         if (buildTool === "orbit" && event.delta <= 4) {
           event.stopPropagation()
-          onSelect(sideAt(event), positionAt(event))
+          onSelect(sideAt(event), positionAt(event), hitAt(event))
         }
       }}
       onPointerDown={(event) => {
@@ -2885,9 +2901,13 @@ function InteractiveObject({
         }
         // Select/resize/material modes only select the object.
         // Dragging is explicitly enabled by the Move action.
-        onSelect(sideAt(event), positionAt(event))
+        onSelect(sideAt(event), positionAt(event), hitAt(event))
       }}
       onPointerMove={(event) => {
+        if (kind === "wall") setHoveredSide((current) => {
+          const next = sideAt(event) ?? null
+          return current === next ? current : next
+        })
         if ((buildTool === "wall" || buildTool === "room") && kind === "wall") {
           onUpdateWallDrawing(event)
           return
@@ -2910,6 +2930,8 @@ function InteractiveObject({
       }}
       onPointerOver={(event) => {
         event.stopPropagation()
+        if (kind === "wall") setHoveredSide(sideAt(event) ?? null)
+        else setHovered(true)
         if (buildTool === "select") document.body.style.cursor = "grab"
         else if ((buildTool === "wall" || buildTool === "room") && kind === "wall") {
           document.body.style.cursor = "crosshair"
@@ -2918,17 +2940,20 @@ function InteractiveObject({
         }
       }}
       onPointerOut={() => {
+        setHoveredSide(null)
+        setHovered(false)
         if (!dragRef.current) document.body.style.cursor = ""
       }}
     >
       {kind === "wall" ? (
           <WallGeometry
             faceHighlights={faceHighlights}
+            selectedFace={selectedFace}
+            hoveredSide={walkHoveredSide ?? hoveredSide}
             detection={detection}
             openings={openings}
             dimensions={{ ...dimensions, height: displayWallHeight }}
             worldScale={worldScale}
-            selected={selected}
             wallHeight={displayWallHeight}
             material={material}
           />
@@ -2936,35 +2961,40 @@ function InteractiveObject({
         <OpeningGeometry
           detection={detection}
           dimensions={dimensions}
-          selected={selected}
+          selected={visualSelected}
+          hovered={visualHovered}
           material={material}
         />
       ) : kind === "floor" ? (
         <FloorGeometry
           tiles={detection.floorTiles}
           dimensions={dimensions}
-          selected={selected}
+          selected={visualSelected}
+          hovered={visualHovered}
           material={material}
         />
       ) : kind === "ceiling" ? (
         <CeilingGeometry
           dimensions={dimensions}
-          selected={selected}
+          selected={visualSelected}
+          hovered={visualHovered}
           material={material}
           height={detection.objectHeightM ?? DEFAULT_WALL_HEIGHT}
         />
       ) : kind === "furniture" ? (
-        <FurnitureGeometry
-          dimensions={dimensions}
-          selected={selected}
-          material={material}
-          height={detection.objectHeightM ?? 0.75}
-        />
+        furnitureItem && furnitureInstance
+          ? <FurniturePrefab item={furnitureItem} instance={furnitureInstance} selected={visualSelected} tint={detection.materialApplied ? material.color : undefined} />
+          : <group rotation={[0, detection.furnitureRotationY ?? 0, 0]}><FurnitureGeometry
+              dimensions={dimensions}
+              selected={selected}
+              material={material}
+              height={detection.objectHeightM ?? 0.75}
+            /></group>
       ) : (
-        <OtherGeometry dimensions={dimensions} selected={selected} color={color} />
+        <group rotation={[0, detection.furnitureRotationY ?? 0, 0]}><OtherGeometry dimensions={dimensions} selected={selected} color={color} /></group>
       )}
 
-      {selected && kind !== "wall" && !isRectObject && (
+      {visualSelected && kind !== "wall" && !isRectObject && (
         <mesh position={[0, labelY / 2, 0]}>
           <boxGeometry
             args={[
@@ -2974,7 +3004,7 @@ function InteractiveObject({
             ]}
           />
           <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-          <Edges color="#175CD3" threshold={1} />
+          <Edges color="#C22828" threshold={1} />
         </mesh>
       )}
 
@@ -3102,10 +3132,12 @@ function InteractiveObject({
 
 function FloorPlanScene({
   detections,
+  committedDetections,
   imageSize,
   selectedId,
   highlightedRoomId,
   highlightedFaces,
+  selectedFace,
   floorMaterialId,
   buildTool,
   editAction,
@@ -3122,10 +3154,21 @@ function FloorPlanScene({
   defaultWallThicknessPx,
   defaultWallHeightM,
   onNotice,
+  onWalkLocked,
+  onExitWalk,
+  placementFurnitureId,
+  onFurniturePlaced,
+  contextHit,
+  contextLabel,
+  materialsOpen,
+  walkLocked,
+  onContextAction,
+  onContextRotate,
   onSelect,
   onLiveChange,
   onCommit,
 }: Props & {
+  committedDetections: Detection[]
   buildTool: BuildTool
   editAction: EditAction
   cameraCommand: CameraCommand
@@ -3140,10 +3183,21 @@ function FloorPlanScene({
   defaultWallThicknessPx: number
   defaultWallHeightM: number
   onNotice: (message: string) => void
+  onWalkLocked: (locked: boolean) => void
+  onExitWalk: () => void
+  placementFurnitureId: string | null
+  onFurniturePlaced: () => void
+  contextHit: { id: string; point: { x: number; y: number; z: number } } | null
+  contextLabel: string
+  materialsOpen: boolean
+  walkLocked: boolean
+  onContextAction: (action: ContextAction) => void
+  onContextRotate: (degrees: number) => void
 }) {
   const { size } = useThree()
   const fogDistanceScale = Math.max(1, size.height / Math.max(size.width, 1))
   const [dragging, setDragging] = useState(false)
+  const [walkHover, setWalkHover] = useState<{id:string|null;side?:WallSide}>({id:null})
   const [draftWalls, setDraftWalls] = useState<Detection[]>([])
   const draftWallsRef = useRef<Detection[]>([])
   const controlsRef = useRef<any>(null)
@@ -3174,10 +3228,20 @@ function FloorPlanScene({
     draft?: WallCenterlineDraft
     releaseCapture: () => void
   } | null>(null)
-  const worldScale = worldScaleFor(imageSize)
+  const worldScale = worldScaleFor(imageSize,metersPerPixel)
   const floorWidth = Math.max(imageSize.width * worldScale, 4)
   const floorDepth = Math.max(imageSize.height * worldScale, 4)
+  const sceneSpan = Math.max(floorWidth, floorDepth)
   const selected = detections.find((detection) => detection.id === selectedId) ?? null
+  const contextEntity = contextEntityFor(selected)
+  const contextCenter = selected ? centerOf(selected.box) : null
+  const contextScale = worldScaleFor(imageSize, metersPerPixel)
+  const selectedContextPoint = selected && contextHit?.id === selected.id ? contextHit.point : null
+  const contextPosition: [number, number, number] | null = selected && contextCenter ? [
+    selectedContextPoint?.x ?? (contextCenter.x - imageSize.width / 2) * contextScale,
+    (selectedContextPoint?.y ?? (contextEntity === "floor" ? 0 : contextEntity === "wall" ? wallHeightOf(selected) : selected.objectHeightM ?? 0.8)) + 0.2,
+    selectedContextPoint?.z ?? (contextCenter.y - imageSize.height / 2) * contextScale,
+  ] : null
   const walls = useMemo(
     () => detections.filter((item) => labelKind(item.label) === "wall"),
     [detections],
@@ -3206,13 +3270,26 @@ function FloorPlanScene({
     return map
   }, [detections, openingAssignments])
 
+  // Material hover changes rendered finishes, never the geometry used for walking.
+  const walkOpeningsByWall = useMemo(() => {
+    const wallItems = committedDetections.filter((item) => labelKind(item.label) === "wall")
+    const map = new Map<string, Detection[]>()
+    committedDetections.forEach((item) => {
+      const kind = labelKind(item.label)
+      if (kind !== "door" && kind !== "window") return
+      const wall = findNearestWall(item, wallItems, imageSize)
+      if (wall) map.set(wall.id, [...(map.get(wall.id) ?? []), item])
+    })
+    return map
+  }, [committedDetections, imageSize])
+
   function pointOnGround(event: ThreeEvent<PointerEvent>) {
     const point = new Vector3()
     return event.ray.intersectPlane(DRAG_PLANE, point) ? point : null
   }
 
   function placeOpening(kind: "door" | "window", worldPoint: Vector3) {
-    const imagePoint = worldPointToImage(worldPoint, imageSize)
+    const imagePoint = worldPointToImage(worldPoint, imageSize, metersPerPixel)
     const opening = openingAtPoint(kind, imagePoint, walls, imageSize)
     if (!opening) {
       onNotice(`วาง${kind === "door" ? "ประตู" : "หน้าต่าง"}ไม่ได้ — กรุณาคลิกบนผนัง`)
@@ -3321,7 +3398,7 @@ function FloorPlanScene({
   ) {
     if (event.button !== 0 || (buildTool !== "wall" && buildTool !== "room")) return
     event.stopPropagation()
-    const imagePoint = worldPointToImage(worldPoint, imageSize)
+    const imagePoint = worldPointToImage(worldPoint, imageSize, metersPerPixel)
     const target = event.target as unknown as {
       setPointerCapture?: (pointerId: number) => void
       releasePointerCapture?: (pointerId: number) => void
@@ -3351,7 +3428,7 @@ function FloorPlanScene({
   }
 
   function beginFloorAction(event: ThreeEvent<PointerEvent>) {
-    if (event.button !== 0 || buildTool === "orbit") return
+    if (event.button !== 0 || buildTool === "orbit" || buildTool === "walk") return
     const point = pointOnGround(event)
     if (!point) return
 
@@ -3361,12 +3438,28 @@ function FloorPlanScene({
     }
 
     event.stopPropagation()
+    if (buildTool === "furniture") {
+      const item = furnitureCatalogItem(placementFurnitureId)
+      if (!item) { onNotice("Choose a furniture piece from the catalog first."); return }
+      const imagePoint = worldPointToImage(point, imageSize, metersPerPixel)
+      const floors = detections.filter(detection => labelKind(detection.label) === "floor").flatMap(floorBoxes)
+      if (floors.length && !floors.some(floor => imagePoint.x >= floor.x1 && imagePoint.x <= floor.x2 && imagePoint.y >= floor.y1 && imagePoint.y <= floor.y2)) {
+        onNotice("Click inside a floor to place furniture.")
+        return
+      }
+      const furniture = makeFurnitureDetection(item, imagePoint, imageSize, metersPerPixel)
+      onCommit([...detections, furniture])
+      onSelect(furniture.id)
+      onFurniturePlaced()
+      onNotice(`${item.name} placed on the floor.`)
+      return
+    }
     if (buildTool === "door" || buildTool === "window") {
       placeOpening(buildTool, point)
       return
     }
 
-    const imagePoint = worldPointToImage(point, imageSize)
+    const imagePoint = worldPointToImage(point, imageSize, metersPerPixel)
     const target = event.target as unknown as {
       setPointerCapture?: (pointerId: number) => void
       releasePointerCapture?: (pointerId: number) => void
@@ -3375,7 +3468,7 @@ function FloorPlanScene({
     const drawingTool =
       buildTool === "room"
         ? "room"
-        : buildTool === "floor" || buildTool === "ceiling" || buildTool === "furniture"
+        : buildTool === "floor" || buildTool === "ceiling"
           ? buildTool
           : "wall"
     drawingRef.current = {
@@ -3398,7 +3491,7 @@ function FloorPlanScene({
     event.stopPropagation()
     const point = event.ray.intersectPlane(drawing.dragPlane, new Vector3())
     if (!point) return
-    const imagePoint = worldPointToImage(point, imageSize)
+    const imagePoint = worldPointToImage(point, imageSize, metersPerPixel)
 
     if (drawing.tool === "wall" && !drawing.orientation) {
       const dx = imagePoint.x - drawing.start.x
@@ -3507,7 +3600,10 @@ function FloorPlanScene({
     }
 
     function onEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") cancelStuckDrawing()
+      if (event.key === "Escape" && drawingRef.current) {
+        event.preventDefault()
+        cancelStuckDrawing()
+      }
     }
 
     window.addEventListener("pointerup", onWindowPointerUp)
@@ -3543,14 +3639,16 @@ function FloorPlanScene({
 
   return (
     <>
-      <CameraController
+      {buildTool !== "walk" && <CameraController
         command={cameraCommand}
         nonce={cameraNonce}
         selected={selected}
         imageSize={imageSize}
+        metersPerPixel={metersPerPixel}
         controlsRef={controlsRef}
-      />
-      <fog attach="fog" args={[lighting.fog, 22 * fogDistanceScale, 48 * fogDistanceScale]} />
+      />}
+      {buildTool === "walk" && <WalkController detections={committedDetections} imageSize={imageSize} scale={worldScale} openingsByWall={walkOpeningsByWall} onLocked={onWalkLocked} onExit={onExitWalk} onSelect={onSelect} onHover={(id,side) => setWalkHover(current => current.id === id && current.side === side ? current : {id,side})} />}
+      <fog attach="fog" args={[lighting.fog, Math.max(22, sceneSpan * 1.8) * fogDistanceScale, Math.max(48, sceneSpan * 3.6) * fogDistanceScale]} />
       <ambientLight intensity={lighting.ambient} />
       <hemisphereLight args={[lightingPreset === "night" ? "#6B7FA8" : "#DDEBFF", lightingPreset === "warm" ? "#8B6750" : "#8A96A8", lighting.hemi]} />
       <directionalLight
@@ -3607,7 +3705,7 @@ function FloorPlanScene({
         <Environment preset={lighting.env} />
       </Suspense>
 
-      {detections.map((detection) => {
+      {detections.filter((detection) => !detection.hiddenInEditor || buildTool === "walk").map((detection) => {
         const assignedWallId = openingAssignments.get(detection.id)
         const assignedWall = assignedWallId
           ? walls.find((wall) => wall.id === assignedWallId) ?? null
@@ -3621,8 +3719,12 @@ function FloorPlanScene({
             detection={detection}
             allDetections={detections}
             faceHighlights={highlightedFaces?.[detection.id]}
+            selectedFace={selectedFace?.wallId === detection.id ? selectedFace : undefined}
+            walkHoveredSide={buildTool === "walk" && walkHover.id === detection.id ? walkHover.side : undefined}
+            walkHovered={buildTool === "walk" && walkHover.id === detection.id}
+            walkSelected={buildTool === "walk" && detection.id === selectedId}
             imageSize={imageSize}
-            selected={detection.id === selectedId || detection.id === highlightedRoomId}
+            selected={buildTool !== "walk" && (detection.id === selectedId || detection.id === highlightedRoomId)}
             buildTool={buildTool}
             editAction={editAction}
             metersPerPixel={metersPerPixel}
@@ -3633,7 +3735,7 @@ function FloorPlanScene({
             snapMode={snapMode}
             gridStepPx={gridStepPx}
             wallViewMode={wallViewMode}
-            onSelect={(side, position) => onSelect(detection.id, side, position)}
+            onSelect={(side, position, hit) => onSelect(detection.id, side, position, hit)}
             onLiveChange={onLiveChange}
             onCommit={onCommit}
             onDragging={setDragging}
@@ -3644,6 +3746,27 @@ function FloorPlanScene({
           />
         )
       })}
+
+      {selected && contextEntity && contextPosition && !selected.hiddenInEditor && !dragging &&
+        (buildTool === "orbit" || buildTool === "select" || (buildTool === "walk" && !walkLocked)) && (
+          <Html position={contextPosition} center zIndexRange={[45, 25]} style={{ pointerEvents: "auto" }}>
+            <div className="-translate-y-[calc(50%+24px)]">
+              <ObjectContextMenu
+                key={selected.id}
+                entity={contextEntity}
+                context={contextLabel}
+                walk={buildTool === "walk"}
+                canPaint={Boolean(targetForDetection(selected))}
+                favorite={Boolean(selected.favorite)}
+                rotationDegrees={(selected.furnitureRotationY ?? 0) * 180 / Math.PI}
+                activeAction={editAction}
+                materialsOpen={materialsOpen}
+                onAction={onContextAction}
+                onRotate={onContextRotate}
+              />
+            </div>
+          </Html>
+      )}
 
       {draftWalls.map((draftWall, index) => {
         if (["floor", "ceiling", "furniture"].includes(labelKind(draftWall.label))) {
@@ -3672,7 +3795,7 @@ function FloorPlanScene({
       <OrbitControls
         ref={controlsRef}
         makeDefault
-        enabled={!dragging}
+        enabled={!dragging && buildTool !== "walk"}
         enableDamping={buildTool !== "orbit"}
         dampingFactor={0.08}
         minDistance={2.8}
@@ -3697,6 +3820,7 @@ function FloorPlanScene({
 }
 const toolInfo: Record<BuildTool, { title: string; detail: string }> = {
   orbit: { title: "หมุนดู 360°", detail: "ลากเมาส์ซ้ายบนโมเดลเพื่อหมุนรอบบ้าน · เลื่อนล้อเมาส์เพื่อซูม · คลิกขวาค้างเพื่อเลื่อน" },
+  walk: { title: "Walk Mode", detail: "WASD เดิน · เมาส์มอง · คลิกเลือกพื้นผิว · ESC ออก" },
   select: {
     title: "เลือกและแก้ไข",
     detail: "ลากตัววัตถุเพื่อย้าย ลากจุดปลายเพื่อปรับความยาว ระบบจะไม่ขยับกำแพงข้างเคียง",
@@ -3743,16 +3867,25 @@ export function EditableFloorPlan3D(props: Props) {
   const [gridStepPx, setGridStepPx] = useState(10)
   const [wallViewMode, setWallViewMode] = useState<WallViewMode>("up")
   const [showHelp, setShowHelp] = useState(false)
+  const [walkLocked, setWalkLocked] = useState(false)
+  const [walkHelpOpen, setWalkHelpOpen] = useState(true)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [materialsOpen, setMaterialsOpen] = useState(false)
+  const [contextHit, setContextHit] = useState<{ id: string; point: { x: number; y: number; z: number } } | null>(null)
+  const [furnitureCatalogOpen, setFurnitureCatalogOpen] = useState(false)
+  const [placementFurnitureId, setPlacementFurnitureId] = useState<string | null>(null)
+  useEffect(() => { if (props.focusMode) setMaterialsOpen(false) }, [props.focusMode])
+  const [advancedToolsOpen, setAdvancedToolsOpen] = useState(false)
   const materialSelectionIdRef = useRef<string | null>(null)
   const [materialCategory, setMaterialCategory] = useState<MaterialCategory>("wall-paint")
+  const [catalogSearch, setCatalogSearch] = useState("")
   const [selectedMaterialId, setSelectedMaterialId] = useState("wall-paint-white")
+  const [previewMaterialId, setPreviewMaterialId] = useState<string | null>(null)
   const [planPreviewOpen, setPlanPreviewOpen] = useState(true)
   const [texturePreviewOpen, setTexturePreviewOpen] = useState(false)
-  const [instantApply, setInstantApply] = useState(false)
   const [paintScope, setPaintScope] = useState<PaintScope>("room")
-  const [wallHit, setWallHit] = useState<{id:string; position:number} | null>(null)
+  useEffect(() => { setPreviewMaterialId(null) }, [materialCategory, paintScope, materialsOpen, props.selectedId])
+  const [wallHit, setWallHit] = useState<({id:string; position:number} & Partial<SurfaceRayHit>) | null>(null)
   const [selectedWallSide, setSelectedWallSide] = useState<WallSide>("positive")
   const [paintRoomId, setPaintRoomId] = useState<string>("")
   const [roomNameDraft, setRoomNameDraft] = useState("")
@@ -3764,6 +3897,8 @@ export function EditableFloorPlan3D(props: Props) {
   const [lightingPreset, setLightingPreset] = useState<LightingPreset>("day")
   const [notice, setNotice] = useState("")
   const [lengthDraft, setLengthDraft] = useState("")
+  const [furnitureRotationDraft, setFurnitureRotationDraft] = useState("")
+  const [furnitureScaleDraft, setFurnitureScaleDraft] = useState("")
   const [thicknessDraft, setThicknessDraft] = useState("")
   const [heightDraft, setHeightDraft] = useState(DEFAULT_WALL_HEIGHT.toFixed(2))
   const [ceilingHeightDraft, setCeilingHeightDraft] = useState(DEFAULT_WALL_HEIGHT.toFixed(2))
@@ -3779,31 +3914,55 @@ export function EditableFloorPlan3D(props: Props) {
     () => props.detections.find((detection) => detection.id === props.selectedId) ?? null,
     [props.detections, props.selectedId],
   )
+  const selectedFurnitureItem = selected ? furnitureCatalogItem(selected.furnitureCatalogId) : null
+  const selectedFurnitureInstance = useMemo(() => selectedFurnitureItem && selected ? furnitureInstanceOf(selected, props.imageSize, props.metersPerPixel) : null, [selectedFurnitureItem, selected, props.imageSize, props.metersPerPixel])
+  const selectedFurnitureDimensions = selectedFurnitureItem && selected ? furnitureDimensionsOf(selected, props.imageSize, props.metersPerPixel) : null
+  useEffect(() => {
+    setFurnitureRotationDraft(selected ? ((selectedFurnitureInstance?.rotationY ?? selected.furnitureRotationY ?? 0) * 180 / Math.PI).toFixed(0) : "")
+    setFurnitureScaleDraft(selectedFurnitureInstance ? selectedFurnitureInstance.scale.y.toFixed(2) : "")
+  }, [selectedFurnitureInstance, selected])
+  const selectedObjectId = selected?.id
+  useEffect(() => {
+    setInspectorOpen(props.focusMode ? false : Boolean(selectedObjectId))
+  }, [selectedObjectId, props.focusMode])
   const currentTool = toolInfo[buildTool]
   const selectedMaterialTarget = selected ? targetForDetection(selected) : null
+  const selectedSurface = selected && wallHit?.id === selected.id
+    ? resolveWallSurface(selected, selectedWallSide, wallHit.position, rooms)
+    : null
   const selectedFinish = selected?.wallFinishes?.find(f=>f.side===selectedWallSide && (wallHit?.id!==selected?.id || (wallHit && wallHit.position>=f.start && wallHit.position<=f.end)))
   const selectedTexture = paintScope === "face" ? selectedFinish ?? selected : selected
   const canEditTexture = Boolean(selected && selectedMaterialTarget && (selectedMaterialTarget!=="wall" || paintScope==="selected" || (paintScope==="face" && selectedFinish)))
   const selectedRoomObjectId = selected?.floorTiles?.length ? selected.id : null
   useEffect(() => { if (selectedRoomObjectId) setPaintRoomId(selectedRoomObjectId) }, [selectedRoomObjectId])
-  const paintRoom = rooms.find(room => room.id === paintRoomId) ?? (selected?.floorTiles ? selected : selectedMaterialDefinitionTarget()==="wall" ? rooms[0] ?? null : null)
+  const paintRoom = selectedSurface?.context === "exterior" && paintScope === "face"
+    ? null
+    : rooms.find(room => room.id === paintRoomId) ?? (selected?.floorTiles ? selected : selectedMaterialDefinitionTarget()==="wall" ? rooms[0] ?? null : null)
   useEffect(() => { setRoomNameDraft(paintRoom?.roomName ?? "") }, [paintRoom?.id, paintRoom?.roomName])
   const roomFaceCount = paintRoom ? props.detections.reduce((n,d) => n + roomWallFaces(paintRoom,d).length,0) : 0
   const scopeLabels: Record<PaintScope,string> = {selected:"ใช้กับที่เลือก",face:"ใช้กับผนังฝั่งนี้",room:"ใช้กับห้องนี้",all:"ใช้กับทั้งหมด"}
-  const validRoomSurface = !rooms.length || Boolean(paintRoom && selected && wallHit && wallHit.id===selected.id && roomWallFaces(paintRoom,selected).some(f=>f.side===selectedWallSide && wallHit.position>=f.start && wallHit.position<=f.end))
+  const validRoomSurface = Boolean(selectedSurface)
   const paintPreview = materialsOpen && selectedMaterialDefinitionTarget() === "wall" && (paintScope!=="face" || validRoomSurface)
     ? applyScopedMaterial(props.detections.map(d=>({...d,wallFinishes:[]})), "wall", selectedMaterialId, paintScope, selected?.id ?? null, paintRoom?.id ?? null, selectedWallSide, wallHit?.id===selected?.id ? wallHit?.position : undefined)
     : []
   const highlightedFaces = Object.fromEntries(paintPreview.filter(d=>labelKind(d.label)==="wall" && (d.wallFinishes?.length || (paintScope==="all" || (paintScope==="selected" && d.id===selected?.id)))).map(d=>[d.id,d.wallFinishes?.length?d.wallFinishes:[{side:"negative" as const,start:0,end:1},{side:"positive" as const,start:0,end:1}]]))
   const paintEnabled = paintScope === "room" ? Boolean(paintRoom && (selectedMaterialDefinitionTarget() === "floor" || (selectedMaterialDefinitionTarget() === "wall" && roomFaceCount > 0))) : paintScope === "all" ? props.detections.some(d => targetForDetection(d) === selectedMaterialDefinitionTarget()) : Boolean(selected && selectedMaterialTarget === selectedMaterialDefinitionTarget() && (paintScope !== "face" || selectedMaterialTarget === "wall"))
+  const previewMaterial = previewMaterialId ? materialById(previewMaterialId) : null
+  const previewDetections = materialsOpen && previewMaterial && paintEnabled && (paintScope !== "face" || validRoomSurface)
+    ? applyScopedMaterial(props.detections, previewMaterial.target, previewMaterial.id, paintScope,
+        selected?.id ?? null, paintRoom?.id ?? null, selectedWallSide,
+        wallHit && wallHit.id === selected?.id ? wallHit.position : undefined)
+    : props.detections
   function selectedMaterialDefinitionTarget() { return materialById(selectedMaterialId).target }
 
   const materialCatalog = useMemo(() => {
     const materials = materialsForCategory(materialCategory)
-    return showFavoritesOnly
+    const listed = showFavoritesOnly
       ? materials.filter((material) => favoriteMaterialIds.includes(material.id))
       : materials
-  }, [favoriteMaterialIds, materialCategory, showFavoritesOnly])
+    const query = catalogSearch.trim().toLocaleLowerCase()
+    return query ? listed.filter(material => [material.name, material.description, material.product?.sku].some(value => value?.toLocaleLowerCase().includes(query))) : listed
+  }, [catalogSearch, favoriteMaterialIds, materialCategory, showFavoritesOnly])
   const selectedMaterialDefinition = useMemo(
     () => materialById(selectedMaterialId),
     [selectedMaterialId],
@@ -3836,12 +3995,12 @@ export function EditableFloorPlan3D(props: Props) {
     const id = selected?.id ?? null
     if (materialSelectionIdRef.current === id) return
     materialSelectionIdRef.current = id
-    if (!selectedMaterialTarget || !selected || paintScope === "room" || materialsOpen) return
+    if (!selectedMaterialTarget || !selected) return
     const face = selectedMaterialTarget === "wall" ? selected.wallFinishes?.find(f => f.side === selectedWallSide) : undefined
     const current = materialById(face?.materialId ?? selected.materialId, selectedMaterialTarget)
     setMaterialCategory(current.category)
     setSelectedMaterialId(current.id)
-  }, [selected, selectedMaterialTarget, selectedWallSide, paintScope, materialsOpen])
+  }, [selected, selectedMaterialTarget, selectedWallSide])
 
   useEffect(() => {
     const list = materialsForCategory(materialCategory)
@@ -3879,9 +4038,9 @@ export function EditableFloorPlan3D(props: Props) {
 
   useEffect(() => {
     if (selected) return
-    if (editAction === "select") return
+    if (editAction === "select" || editAction === "material") return
 
-    // Never leave the editor in Move / Resize / Material mode without a target.
+    // Moving and resizing require an object; browsing materials does not.
     setEditAction("select")
     setMaterialsOpen(false)
     setInspectorOpen(false)
@@ -3900,6 +4059,20 @@ export function EditableFloorPlan3D(props: Props) {
 
   function chooseTool(tool: BuildTool) {
     document.body.style.cursor = ""
+    if (buildTool === "walk" && tool !== "walk") {
+      if (document.pointerLockElement) document.exitPointerLock()
+      setWalkLocked(false)
+      runCamera("home")
+    }
+    if (tool === "walk") {
+      setFurnitureCatalogOpen(false)
+      setEditorView("perspective")
+      setBuildTool("walk")
+      setEditAction("material")
+      setMaterialsOpen(false)
+      setWalkHelpOpen(true)
+      return
+    }
     if (tool === "orbit" && editorView !== "perspective") {
       setEditorView("perspective")
       runCamera("home")
@@ -3916,8 +4089,12 @@ export function EditableFloorPlan3D(props: Props) {
       defaultThicknessCustomizedRef.current = true
     }
     setBuildTool(tool)
+    setFurnitureCatalogOpen(tool === "furniture")
     if (tool === "select") {
       setEditAction((current) => current)
+    } else if (tool === "orbit") {
+      setEditAction("select")
+      setMaterialsOpen(false)
     } else {
       setEditAction("select")
       setMaterialsOpen(false)
@@ -3927,9 +4104,8 @@ export function EditableFloorPlan3D(props: Props) {
   }
 
   function chooseEditAction(action: EditAction) {
-    // Editing actions intentionally require an existing selection first.
-    // This prevents accidental move/resize/material changes when nothing is selected.
-    if (action !== "select" && !selected) {
+    // Move and resize need a target; the catalog can open before selection.
+    if ((action === "move" || action === "resize") && !selected) {
       setEditAction("select")
       setBuildTool("select")
       setMaterialsOpen(false)
@@ -3944,15 +4120,14 @@ export function EditableFloorPlan3D(props: Props) {
     document.body.style.cursor = ""
 
     if (action === "material") {
-      setInspectorOpen(false)
       setMaterialsOpen(true)
       setPaintScope((current) => current)
     } else if (action === "resize") {
       setMaterialsOpen(false)
-      setInspectorOpen(false)
+      setInspectorOpen(Boolean(selected))
     } else if (action === "move") {
       setMaterialsOpen(false)
-      setInspectorOpen(false)
+      setInspectorOpen(Boolean(selected))
     } else {
       setMaterialsOpen(false)
     }
@@ -4125,7 +4300,7 @@ export function EditableFloorPlan3D(props: Props) {
     if (scope === "room" && (!paintRoom || !["wall","floor"].includes(material.target))) { showNotice("เลือกห้องและวัสดุพื้นหรือผนังก่อน"); return }
     if ((scope === "selected" || scope === "face") && (!selected || selectedMaterialTarget !== material.target)) { showNotice(`เลือก${targetLabel(material.target)}ก่อนใช้วัสดุ`); return }
     if (scope === "face" && material.target !== "wall") return
-    if (scope === "face" && !validRoomSurface) { showNotice("เลือกหมายเลขผนังในห้องก่อนทาสี"); return }
+    if (scope === "face" && !validRoomSurface) { showNotice("คลิกด้านผนังที่ต้องการก่อนใช้วัสดุ"); return }
     if (scope === "room" && material.target === "wall" && !props.detections.some(d => roomWallFaces(paintRoom!,d).length)) { showNotice("ไม่พบผนังที่ติดกับห้องนี้ กรุณาแบ่งพื้นตามห้องใหม่หลังแก้ผนัง"); return }
     const next = applyScopedMaterial(props.detections, material.target, material.id, scope, selected?.id ?? null, paintRoom?.id ?? null, selectedWallSide, wallHit?.id === selected?.id ? wallHit?.position : undefined)
     if (!next.some((d,i)=>JSON.stringify(d)!==JSON.stringify(props.detections[i]))) {
@@ -4139,8 +4314,8 @@ export function EditableFloorPlan3D(props: Props) {
 
   function chooseMaterial(material: MaterialDefinition) {
     setSelectedMaterialId(material.id)
-    if (!instantApply || material.target === "wall") return
-    applyMaterial(paintScope, material.id)
+    setPreviewMaterialId(null)
+    if (paintEnabled && (paintScope !== "face" || validRoomSurface)) applyMaterial(paintScope, material.id)
   }
 
   function toggleFavorite(materialId: string) {
@@ -4187,16 +4362,18 @@ export function EditableFloorPlan3D(props: Props) {
     }
 
     const rows = [
-      ["รายการ", "ประเภท", "ปริมาณ", "หน่วย", "ราคาต่อหน่วย (บาท)", "รวม (บาท)"],
+      ["รายการ", "ประเภท", "ปริมาณ", "หน่วย", "จำนวนบรรจุภัณฑ์", "หน่วยบรรจุ", "ราคาต่อหน่วย (บาท)", "รวม (บาท)"],
       ...budget.lines.map((line) => [
         line.name,
         targetLabel(line.target),
         line.quantity.toFixed(line.unit === "ชิ้น" ? 0 : 2),
         line.unit,
-        line.unitPrice.toFixed(0),
-        line.total.toFixed(0),
+        line.packageQuantity?.toString() ?? "",
+        line.packageUnit ?? "",
+        line.unitPrice?.toFixed(0) ?? "",
+        line.total?.toFixed(0) ?? "",
       ]),
-      ["รวมประมาณการ", "", "", "", "", budget.subtotal.toFixed(0)],
+      ["รวมประมาณการ", "", "", "", "", "", "", budget.subtotal.toFixed(0)],
     ]
     const csv = rows
       .map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
@@ -4278,6 +4455,52 @@ export function EditableFloorPlan3D(props: Props) {
     showNotice("ทำสำเนาวัตถุแล้ว")
   }
 
+  function applyFurnitureRotation(degrees = Number(furnitureRotationDraft)) {
+    if (!selected || !["furniture", "object"].includes(labelKind(selected.label)) || !Number.isFinite(degrees)) return
+    const radians = ((degrees % 360) * Math.PI) / 180
+    props.onCommit(props.detections.map(item => item.id === selected.id ? { ...item, furnitureRotationY: radians } : item))
+    setFurnitureRotationDraft(degrees.toFixed(0))
+  }
+
+  function openContextMaterials() {
+    if (!selected || !selectedMaterialTarget) return
+    const face = selectedMaterialTarget === "wall" && selectedSurface
+      ? selected.wallFinishes?.find(finish => finish.side === selectedSurface.side && wallHit && wallHit.position >= finish.start && wallHit.position <= finish.end)
+      : undefined
+    const current = materialById(face?.materialId ?? selected.materialId, selectedMaterialTarget)
+    setMaterialCategory(current.category)
+    setSelectedMaterialId(current.id)
+    setCatalogSearch("")
+    setPaintScope(selectedMaterialTarget === "wall" && selectedSurface ? "face" : "selected")
+    setMaterialsOpen(true)
+    setFurnitureCatalogOpen(false)
+    if (buildTool !== "walk") { setBuildTool("select"); setEditAction("material") }
+  }
+
+  function handleContextAction(action: ContextAction) {
+    if (!selected) return
+    if (action === "paint") { openContextMaterials(); return }
+    if (buildTool === "walk") return
+    if (action === "move" || action === "resize") { chooseEditAction(action); return }
+    if (action === "duplicate") { duplicateSelected(); return }
+    if (action === "delete") { props.onDeleteSelected(); return }
+    if (action === "details") { setInspectorOpen(true); return }
+    if (action === "favorite" || action === "hide") {
+      props.onCommit(props.detections.map(item => item.id === selected.id
+        ? action === "favorite" ? { ...item, favorite: !item.favorite } : { ...item, hiddenInEditor: true }
+        : item))
+      if (action === "hide") { props.onSelect(null); setContextHit(null); showNotice("Object hidden in 3D editing. Use Hidden objects to show it again.") }
+    }
+  }
+
+  function applyFurnitureScale() {
+    if (!selectedFurnitureItem || !selected || !selectedFurnitureInstance) return
+    const requested = Number(furnitureScaleDraft)
+    if (!Number.isFinite(requested) || requested < 0.25 || requested > 4) return
+    const factor = requested / selectedFurnitureInstance.scale.y
+    props.onCommit(props.detections.map(item => item.id === selected.id ? resizeFurnitureUniform(item, factor, props.imageSize) : item))
+  }
+
   function cycleSnapMode() {
     setSnapMode((current) =>
       current === "smart" ? "grid" : current === "grid" ? "free" : "smart",
@@ -4343,6 +4566,7 @@ export function EditableFloorPlan3D(props: Props) {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented) return
       const target = event.target as HTMLElement | null
       const isTyping =
         target?.tagName === "INPUT" ||
@@ -4351,6 +4575,13 @@ export function EditableFloorPlan3D(props: Props) {
         Boolean(document.querySelector('[role="alertdialog"], [role="dialog"]')) ||
         target?.isContentEditable
       if (isTyping) return
+      if (buildTool === "walk") {
+        if (event.key === "Escape") {
+          event.preventDefault()
+          chooseTool("orbit")
+        }
+        return
+      }
 
       if ((event.ctrlKey || event.metaKey) &&
         (event.code === "KeyD" || event.key.toLowerCase() === "d")) {
@@ -4360,13 +4591,36 @@ export function EditableFloorPlan3D(props: Props) {
       }
       if (event.ctrlKey || event.metaKey) return
 
-      if (event.key === "Escape" && buildTool !== "orbit") chooseTool("select")
+      if (event.key === "Escape" && materialsOpen) {
+        event.preventDefault()
+        setMaterialsOpen(false)
+      }
+      else if (event.key === "Escape" && props.focusMode && furnitureCatalogOpen) {
+        event.preventDefault()
+        setFurnitureCatalogOpen(false)
+      }
+      else if (event.key === "Escape" && props.focusMode && advancedToolsOpen) {
+        event.preventDefault()
+        setAdvancedToolsOpen(false)
+      }
+      else if (event.key === "Escape" && props.focusMode && inspectorOpen) {
+        event.preventDefault()
+        setInspectorOpen(false)
+      }
+      else if (event.key === "Escape" && buildTool !== "orbit" && buildTool !== "select") {
+        event.preventDefault()
+        chooseTool("select")
+      }
+      else if (event.key === "Escape" && props.focusMode) {
+        event.preventDefault()
+        props.onExitFocus?.()
+      }
       else if (event.key === "1") chooseTool("select")
       else if (event.key === "2") chooseTool("wall")
       else if (event.code === "KeyR" || event.key.toLowerCase() === "r") chooseTool("room")
       else if (event.key === "3") chooseTool("door")
       else if (event.key === "4") chooseTool("window")
-      else if (event.key === "5" || event.code === "KeyF") chooseTool("floor")
+      else if (event.key === "5") chooseTool("floor")
       else if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "KeyW", "KeyA", "KeyS", "KeyD"].includes(event.code)) {
         event.preventDefault()
         runCamera(({ ArrowUp: "pan-forward", KeyW: "pan-forward", ArrowDown: "pan-back", KeyS: "pan-back", ArrowLeft: "pan-left", KeyA: "pan-left", ArrowRight: "pan-right", KeyD: "pan-right" } as Record<string, CameraCommand>)[event.code])
@@ -4400,7 +4654,8 @@ export function EditableFloorPlan3D(props: Props) {
     : `${gridStepPx} px`
 
   return (
-    <div className="animate-in fade-in overflow-hidden rounded-2xl border border-border bg-slate-200 duration-500">
+    <div className={`animate-in fade-in overflow-hidden rounded-2xl border border-border bg-slate-200 duration-500 ${props.focusMode ? "relative flex h-full min-h-0 flex-col" : ""}`}>
+      {!props.focusMode && <>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-white/95 px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -4426,7 +4681,7 @@ export function EditableFloorPlan3D(props: Props) {
           <div className="flex rounded-xl bg-secondary p-1">
             <button
               type="button"
-              onClick={() => chooseView("plan")}
+              onClick={() => { if (buildTool === "walk") chooseTool("orbit"); chooseView("plan") }}
               className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
                 editorView === "plan"
                   ? "bg-white text-primary shadow-sm"
@@ -4448,7 +4703,9 @@ export function EditableFloorPlan3D(props: Props) {
             </button>
           </div>
 
-          <label className="flex h-9 items-center gap-1.5 rounded-xl border border-border bg-white px-2 text-[11px] font-medium text-muted-foreground">
+          <Button type="button" size="sm" variant={buildTool === "walk" ? "default" : "outline"} className="h-9 rounded-xl" aria-pressed={buildTool === "walk"} onClick={() => chooseTool(buildTool === "walk" ? "orbit" : "walk")}><Footprints className="mr-1.5 h-4 w-4" />Walk</Button>
+
+          {buildTool !== "walk" && <label className="flex h-9 items-center gap-1.5 rounded-xl border border-border bg-white px-2 text-[11px] font-medium text-muted-foreground">
             <Magnet className="h-3.5 w-3.5 text-primary" />
             <select
               value={snapMode}
@@ -4460,9 +4717,9 @@ export function EditableFloorPlan3D(props: Props) {
               <option value="grid">กริด</option>
               <option value="free">อิสระ</option>
             </select>
-          </label>
+          </label>}
 
-          {snapMode === "grid" && (
+          {buildTool !== "walk" && snapMode === "grid" && (
             <select
               value={gridStepPx}
               onChange={(event) => setGridStepPx(Number(event.target.value))}
@@ -4479,16 +4736,17 @@ export function EditableFloorPlan3D(props: Props) {
             </select>
           )}
 
-          <Button type="button" size="sm" variant="outline" className="h-9 rounded-xl px-2 sm:px-3" onClick={runAutoAlign} title="จัดแนวผนังและช่องเปิด">
+          {buildTool !== "walk" && <Button type="button" size="sm" variant="outline" className="h-9 rounded-xl px-2 sm:px-3" onClick={runAutoAlign} title="จัดแนวผนังและช่องเปิด">
             <WandSparkles className="h-4 w-4 sm:mr-2" />
             <span className="hidden sm:inline">จัดแนว</span>
-          </Button>
+          </Button>}
           <Button
             type="button"
             size="sm"
             variant={materialsOpen ? "secondary" : "outline"}
             className="h-9 rounded-xl px-2 sm:px-3"
             onClick={() => {
+              if (buildTool === "walk") { setMaterialsOpen(open => !open); return }
               if (!materialsOpen) {
                 if (selectedMaterialDefinition.target==="wall" && paintScope==="selected") setPaintScope("room")
                 chooseEditAction("material")
@@ -4508,12 +4766,18 @@ export function EditableFloorPlan3D(props: Props) {
           <Button type="button" size="icon-sm" variant="outline" className="rounded-xl" title="Redo" onClick={props.onRedo} disabled={!props.canRedo}>
             <Redo2 className="h-4 w-4" />
           </Button>
+          {buildTool !== "walk" && <Button type="button" size="icon-sm" variant="outline" className="rounded-xl" title="กลับมุมมองหลัก" aria-label="กลับมุมมองหลัก" onClick={() => runCamera(editorView === "plan" ? "plan" : "home")}>
+            <Home className="h-4 w-4" />
+          </Button>}
           <Button type="button" size="icon-sm" variant={showHelp ? "secondary" : "ghost"} className="rounded-xl" title="วิธีควบคุม" onClick={() => setShowHelp((value) => !value)}>
             <CircleHelp className="h-4 w-4" />
           </Button>
         </div>
       </div>
+      </>}
 
+      {!props.focusMode && buildTool !== "walk" && <details className="border-b border-border bg-white">
+      <summary className="cursor-pointer px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-primary">เครื่องมือเพิ่มเติม · จัดแนว แบ่งห้อง เลือกชิ้นงานที่ถูกบัง</summary>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-white px-4 py-3">
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label="โหมดควบคุม 3D">
           <Button
@@ -4564,6 +4828,8 @@ export function EditableFloorPlan3D(props: Props) {
         <label className="text-xs font-medium">เลือกชิ้นงาน
           <select aria-label="เลือกวัตถุในโมเดล" className="ml-2 max-w-[220px] rounded-lg border px-2 py-1" value={props.selectedId ?? ""} onChange={(event) => {
             props.onSelect(event.target.value || null)
+            if (event.target.value) setInspectorOpen(true)
+            setWallHit(null)
             const object=props.detections.find(d=>d.id===event.target.value)
             const target=object && targetForDetection(object)
             if (object && target && target!=="wall") {
@@ -4577,19 +4843,40 @@ export function EditableFloorPlan3D(props: Props) {
           </select>
         </label>
         <span className="text-[11px] text-muted-foreground">เลือกพื้นหรือผนังที่ถูกบังได้ · ใช้วัสดุเฉพาะชิ้นได้</span>
-        {selected && (
-          <div className="ml-auto flex gap-2">
-            <Button size="sm" variant="outline" disabled={!selected} onClick={() => chooseEditAction("resize")}>ปรับขนาด</Button>
-            <Button size="sm" variant="destructive" onClick={props.onDeleteSelected}>ลบวัตถุที่เลือก</Button>
-          </div>
-        )}
-
       </div>
+      </details>}
       <div
         ref={canvasHostRef}
-        className={`relative h-[720px] w-full touch-none select-none overflow-hidden overscroll-contain ${buildTool === "orbit" ? "cursor-grab active:cursor-grabbing" : ""}`}
+        className={`relative w-full touch-none select-none overflow-hidden overscroll-contain ${props.focusMode ? "min-h-0 flex-1" : "h-[720px]"} ${buildTool === "orbit" ? "cursor-grab active:cursor-grabbing" : ""}`}
       >
-        <div className="pointer-events-none absolute left-3 top-3 z-20 flex max-w-[140px] sm:max-w-[360px] items-center gap-2 rounded-full border border-white/80 bg-white/92 px-3 py-2 shadow-lg backdrop-blur-md">
+        {props.focusMode && props.onExitFocus && props.onSwitchWorkspace && <FocusToolbar view="3d" onExit={props.onExitFocus} onView={props.onSwitchWorkspace} onUndo={props.onUndo} onRedo={props.onRedo} canUndo={props.canUndo} canRedo={props.canRedo} walkActive={buildTool === "walk"} onWalkToggle={() => chooseTool(buildTool === "walk" ? "orbit" : "walk")} toolLabel={currentTool.title} activeAction={buildTool === "select" ? editAction : undefined} onAction={chooseEditAction} onAdd={chooseTool} canManipulate={Boolean(selected)} onResetCamera={() => runCamera(editorView === "plan" ? "plan" : "home")} cameraView={editorView} onCameraViewToggle={() => chooseView(editorView === "plan" ? "perspective" : "plan")} />}
+        <EditorToolRail
+          activeTool={buildTool}
+          focusMode={props.focusMode}
+          materialsOpen={materialsOpen}
+          advancedOpen={advancedToolsOpen}
+          onTool={chooseTool}
+          onMaterials={() => buildTool === "walk" ? setMaterialsOpen(open => !open) : materialsOpen ? setMaterialsOpen(false) : chooseEditAction("material")}
+          onAdvanced={() => setAdvancedToolsOpen((open) => !open)}
+        />
+        {furnitureCatalogOpen && buildTool !== "walk" && <FurnitureCatalog selectedId={placementFurnitureId} onSelect={(item: FurnitureCatalogItem) => {
+          setPlacementFurnitureId(item.id)
+          setBuildTool("furniture")
+          setFurnitureCatalogOpen(false)
+          showNotice(`Click a floor to place ${item.name}.`)
+        }} onClose={() => setFurnitureCatalogOpen(false)} />}
+        {buildTool === "furniture" && placementFurnitureId && !furnitureCatalogOpen && <button type="button" className="absolute left-20 top-3 z-30 rounded-xl border bg-white/95 px-3 py-2 text-xs font-medium shadow-lg focus-visible:outline-2 focus-visible:outline-primary" onClick={() => setFurnitureCatalogOpen(true)} aria-label="Change furniture piece" title="Change furniture piece">{furnitureCatalogItem(placementFurnitureId)?.name} · Click floor to place</button>}
+        {buildTool === "walk" && walkLocked && <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center"><span aria-hidden="true" className="h-4 w-4 rounded-full border-2 border-white shadow-[0_0_0_1px_#334155]" /></div>}
+        {buildTool === "walk" && !walkLocked && <div className="absolute bottom-5 left-1/2 z-30 w-[min(340px,calc(100%-32px))] -translate-x-1/2 rounded-2xl border bg-white/96 p-3 text-center shadow-xl">
+          {walkHelpOpen && <div className="mb-2 text-xs text-slate-600"><p className="font-semibold text-slate-900">Walk Mode</p><p>WASD / arrows — Move · Mouse — Look</p><p>Click — Select surface · ESC — Exit</p></div>}
+          <Button type="button" size="sm" onClick={() => { setWalkHelpOpen(false); canvasHostRef.current?.querySelector("canvas")?.requestPointerLock() }}> {walkHelpOpen ? "Start walking" : "Resume walking"} </Button>
+          {walkHelpOpen && <button type="button" className="ml-2 text-xs text-muted-foreground underline" onClick={() => setWalkHelpOpen(false)}>Dismiss tips</button>}
+        </div>}
+        {buildTool !== "walk" && props.detections.some(item => item.hiddenInEditor) && <details className="absolute bottom-16 right-3 z-[55] max-h-48 w-52 overflow-y-auto rounded-xl border bg-white/95 p-2 text-xs shadow-lg" aria-label="Hidden objects">
+          <summary className="cursor-pointer font-semibold">Hidden objects ({props.detections.filter(item => item.hiddenInEditor).length})</summary>
+          <div className="mt-2 space-y-1">{props.detections.filter(item => item.hiddenInEditor).map(item => <button key={item.id} type="button" title={`Show ${item.label}`} aria-label={`Show ${item.label}`} className="block w-full rounded-lg px-2 py-1 text-left hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-primary" onClick={() => { props.onCommit(props.detections.map(current => current.id === item.id ? { ...current, hiddenInEditor: undefined } : current)); props.onSelect(item.id) }}>Show {item.label}</button>)}</div>
+        </details>}
+        {!props.focusMode && <div className="pointer-events-none absolute left-20 top-3 z-20 flex max-w-[140px] sm:max-w-[360px] items-center gap-2 rounded-full border border-white/80 bg-white/92 px-3 py-2 shadow-lg backdrop-blur-md">
           <span className="rounded-full bg-primary/10 p-1.5 text-primary">
             {buildTool === "orbit" ? (<RotateCw className="h-3.5 w-3.5" />) : buildTool === "select" ? (
               <MousePointer2 className="h-3.5 w-3.5" />
@@ -4612,10 +4899,10 @@ export function EditableFloorPlan3D(props: Props) {
               · {formatDimension(Math.max(selected.box.width, selected.box.height), props.metersPerPixel)}
             </span>
           )}
-        </div>
+        </div>}
 
-        {props.previewDataUrl && (
-          <div className="absolute left-3 top-16 z-20 overflow-hidden rounded-xl border bg-white/95 shadow-lg" data-testid="original-plan-preview">
+        {!props.focusMode && props.previewDataUrl && (
+          <div className="absolute bottom-3 left-20 z-20 overflow-hidden rounded-xl border bg-white/95 shadow-lg" data-testid="original-plan-preview">
             <button type="button" className="block w-full px-3 py-2 text-left text-xs font-semibold" onClick={() => setPlanPreviewOpen(!planPreviewOpen)} aria-expanded={planPreviewOpen}>แปลนต้นฉบับ {planPreviewOpen ? "−" : "+"}</button>
             {planPreviewOpen && <img src={props.previewDataUrl} alt="แปลนต้นฉบับสำหรับเทียบกับ 3D" className="h-24 w-32 object-contain p-1 sm:h-36 sm:w-52" />}
           </div>
@@ -4626,7 +4913,7 @@ export function EditableFloorPlan3D(props: Props) {
           </div>
         )}
 
-        {showHelp && (
+        {!props.focusMode && showHelp && (
           <div className="absolute left-3 top-14 z-30 w-[300px] rounded-2xl border border-white/80 bg-white/96 p-4 shadow-2xl backdrop-blur-xl">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-semibold text-foreground">การควบคุมแบบเข้าใจง่าย</p>
@@ -4643,7 +4930,7 @@ export function EditableFloorPlan3D(props: Props) {
               <p><b className="text-foreground">เมาส์กลาง:</b> หมุนกล้องในมุม 3D</p>
               <p><b className="text-foreground">คลิกขวา:</b> เลื่อนมุมมอง</p>
               <p><b className="text-foreground">ล้อเมาส์:</b> ซูมเข้า–ออก</p>
-              <p><b className="text-foreground">ปุ่ม 5 / F:</b> สร้างพื้นเองโดยลากเป็นสี่เหลี่ยม</p>
+              <p><b className="text-foreground">ปุ่ม 5:</b> สร้างพื้นเองโดยลากเป็นสี่เหลี่ยม · <b className="text-foreground">F:</b> Focus Mode</p>
               <p><b className="text-foreground">ลูกศร / WASD:</b> เลื่อนมุมมอง</p>
 
               <p><b className="text-foreground">Ctrl+D:</b> ทำสำเนาวัตถุ</p>
@@ -4733,7 +5020,7 @@ export function EditableFloorPlan3D(props: Props) {
                         </div>
                         <div className="grid grid-cols-2 gap-2 rounded-xl bg-slate-50 p-3">
                           <span>ประเภท</span><b>{targetLabel(material.target)}</b>
-                          <span>ราคา</span><b>{formatMoney(material.price)}/{material.unit}</b>
+                          <span>ราคา</span><b>{referencePrice(material)}</b>
                           <span>ความด้าน</span><b>{material.roughness.toFixed(2)}</b>
                           <span>พื้นผิว</span><b>{material.textureMaps ? "ภาพจริง" : "PBR"}</b>
                         </div>
@@ -4758,7 +5045,7 @@ export function EditableFloorPlan3D(props: Props) {
         )}
 
         {materialsOpen && (
-          <div className="absolute right-3 top-3 z-50 max-h-[690px] w-[340px] max-w-[calc(100%-24px)] overflow-y-auto rounded-2xl border border-white/80 bg-white/95 p-4 shadow-2xl backdrop-blur-xl">
+          <div className="absolute left-20 top-16 z-50 max-h-[620px] w-[340px] max-w-[calc(100%-92px)] overflow-y-auto rounded-2xl border border-white/80 bg-white/95 p-4 shadow-2xl backdrop-blur-xl">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
@@ -4766,8 +5053,10 @@ export function EditableFloorPlan3D(props: Props) {
                     <Paintbrush className="h-4 w-4" />
                   </span>
                   <div>
-                    <p className="text-sm font-semibold text-foreground">วัสดุและงบประมาณ</p>
-                    <p className="text-[10px] text-muted-foreground">เลือกขอบเขตก่อน แล้วเลือกวัสดุและกดใช้</p>
+                    <p className="text-sm font-semibold text-foreground">{selectedMaterialDefinition.target === "wall" ? "Wall Materials" : selectedMaterialDefinition.target === "floor" ? "Floor Materials" : selectedMaterialDefinition.target === "furniture" ? "Furniture Materials" : "Materials"}</p>
+                    <p className="text-[10px] text-muted-foreground">เลือกขอบเขต · วางเมาส์เพื่อดูตัวอย่าง · คลิกเพื่อใช้</p>
+                    {selectedMaterialTarget === "wall" && selectedSurface && <p className="text-[10px] font-medium text-slate-600">{selectedSurface.context === "interior" ? `Interior — ${selectedSurface.roomName ?? "Room"}` : "Exterior"}</p>}
+                    {selectedMaterialTarget === "floor" && selected && <p className="text-[10px] font-medium text-slate-600">{selected.roomName ?? "Room"} Floor</p>}
                   </div>
                 </div>
               </div>
@@ -4780,23 +5069,21 @@ export function EditableFloorPlan3D(props: Props) {
               </button>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-1 rounded-xl bg-secondary p-1 sm:grid-cols-3">
+            <input type="search" aria-label="Search materials" placeholder="Search SCG products and materials..." value={catalogSearch} onChange={event => setCatalogSearch(event.target.value)} className="mt-3 w-full rounded-xl border border-border bg-white px-3 py-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary" />
+            <div className="mt-3 grid grid-cols-5 gap-1 rounded-xl bg-secondary p-1">
               {([
-                { key: "floor-tile" as const, label: "กระเบื้องพื้น" },
-                { key: "wall-paint" as const, label: "สีทาผนัง" },
-                { key: "wallpaper" as const, label: "วอลเปเปอร์" },
-                { key: "woodwork" as const, label: "งานไม้ / ผนัง" },
-                { key: "door" as const, label: "ประตู" },
-                { key: "window" as const, label: "หน้าต่าง" },
-
-
+                { key: "floor-tile" as const, label: "Floor" },
+                { key: "wall-paint" as const, label: "Wall" },
+                { key: "door" as const, label: "Door" },
+                { key: "window" as const, label: "Window" },
+                { key: "ceiling" as const, label: "Ceiling" },
               ]).map((item) => (
                 <button
                   key={item.key}
                   type="button"
                   onClick={() => {
                     setMaterialCategory(item.key)
-                    if (["wall-paint","wallpaper","woodwork"].includes(item.key)) {
+                    if (item.key === "wall-paint") {
                       if (selectedMaterialDefinition.target!=="wall") setPaintScope("room")
                     } else if (item.key==="floor-tile") {
                       if (paintScope==="face") setPaintScope("room")
@@ -4812,9 +5099,14 @@ export function EditableFloorPlan3D(props: Props) {
                 </button>
               ))}
             </div>
+            <details className="mt-2 text-xs"><summary className="cursor-pointer text-muted-foreground">More finishes</summary><div className="mt-2 flex flex-wrap gap-1">{([{"key":"wallpaper","label":"Wallpaper"},{"key":"woodwork","label":"Wood panel"},{"key":"furniture","label":"Furniture"},{"key":"glass-metal","label":"Glass / metal"}] as const).map(item => <button type="button" key={item.key} onClick={() => { setMaterialCategory(item.key); setPaintScope(item.key === "wallpaper" || item.key === "woodwork" ? "room" : "selected") }} className="rounded-lg border bg-white px-2 py-1.5 hover:border-primary/50">{item.label}</button>)}</div></details>
 
+            {selectedSurface?.context === "exterior" && paintScope === "face" && (
+              <p className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-800">Exterior wall face selected</p>
+            )}
             {selectedMaterialDefinition.target === "wall" ? <WallPaintPicker
               rooms={rooms} detections={props.detections} room={paintRoom} scope={paintScope}
+              exterior={selectedSurface?.context === "exterior"}
               selectedId={selected?.id ?? null} side={selectedWallSide} position={wallHit?.id===selected?.id?wallHit?.position:undefined}
               onRoom={id=>{ setPaintRoomId(id); setWallHit(null); if (paintScope==="face") {
                 const room=rooms.find(r=>r.id===id)
@@ -4851,24 +5143,16 @@ export function EditableFloorPlan3D(props: Props) {
             </div>
 
             </>}
-            {selectedMaterialDefinition.target === "wall" && <p className="mt-4 text-sm font-semibold">2. เลือกสีหรือวัสดุ</p>}
+            {selectedMaterialDefinition.target === "wall" && <p className="mt-4 text-sm font-semibold">เลือกวัสดุผนัง</p>}
 
             {selectedMaterialDefinition.target === "wall" ? <div className="mt-2 grid grid-cols-2 gap-2" aria-label="สีและวัสดุผนัง">
-              {materialsForCategory(materialCategory).map(material=><button type="button" key={material.id} aria-pressed={selectedMaterialId===material.id} onClick={()=>chooseMaterial(material)} className={`flex items-center gap-2 rounded-xl border p-2 text-left ${selectedMaterialId===material.id?"border-primary bg-primary/5 ring-2 ring-primary/15":"bg-white"}`}>
+              {materialCatalog.map(material=><button type="button" key={material.id} aria-pressed={selectedMaterialId===material.id} onMouseEnter={() => setPreviewMaterialId(material.id)} onMouseLeave={() => setPreviewMaterialId(null)} onFocus={() => setPreviewMaterialId(material.id)} onBlur={() => setPreviewMaterialId(null)} onClick={()=>chooseMaterial(material)} className={`flex items-center gap-2 rounded-xl border p-2 text-left ${selectedMaterialId===material.id?"border-primary bg-primary/5 ring-2 ring-primary/15":"bg-white"}`}>
                 <span className="h-9 w-9 shrink-0 rounded-lg border" style={{backgroundColor:material.color,backgroundImage:`url(${previewUrlForMaterial(material) ?? ""})`,backgroundSize:"cover"}} />
-                <span className="text-xs font-medium">{material.name}</span>
+                <span className="min-w-0 text-xs font-medium"><span className="block">{material.name}</span><span className="block text-[10px] font-normal text-muted-foreground">{referencePrice(material)}</span>{material.product && <span className="block text-[9px] font-normal text-muted-foreground">Last checked: {material.product.lastCheckedAt}</span>}</span>
               </button>)}
             </div> : <>
             <div className="mt-2 flex items-center justify-between gap-2">
-              <label className="flex items-center gap-2 text-[10px] font-medium text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={instantApply}
-                  onChange={(event) => setInstantApply(event.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-border"
-                />
-                ใช้บนโมเดลทันทีเมื่อคลิก
-              </label>
+              <span className="text-[10px] font-medium text-muted-foreground">วางเมาส์เพื่อดูตัวอย่าง · คลิกเพื่อใช้</span>
               <div className="flex gap-1">
                 <button
                   type="button"
@@ -4940,6 +5224,10 @@ export function EditableFloorPlan3D(props: Props) {
                   >
                     <button
                       type="button"
+                      onMouseEnter={() => setPreviewMaterialId(material.id)}
+                      onMouseLeave={() => setPreviewMaterialId(null)}
+                      onFocus={() => setPreviewMaterialId(material.id)}
+                      onBlur={() => setPreviewMaterialId(null)}
                       onClick={() => chooseMaterial(material)}
                       className="flex min-w-0 flex-1 items-center gap-3 text-left"
                     >
@@ -4947,14 +5235,16 @@ export function EditableFloorPlan3D(props: Props) {
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-xs font-semibold text-foreground">{material.name}</span>
                         <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{material.description}</span>
-                        <span className="mt-1 block text-[9px] font-medium text-primary">{targetLabel(material.target)}</span>
+                        <span className="mt-1 block text-[9px] font-medium text-primary">{material.product?.brand ?? targetLabel(material.target)} · {material.product?.category ?? targetLabel(material.target)}</span>
+                        {material.product?.dimensions && <span className="mt-1 block text-[9px] text-muted-foreground">{[material.product.dimensions.widthMm,material.product.dimensions.lengthMm,material.product.dimensions.thicknessMm].filter(value => value !== undefined).join(" × ")} mm</span>}
                       </span>
                       <span className="text-right text-[10px] font-semibold text-foreground">
-                        {formatMoney(material.price)}
-                        <span className="block font-normal text-muted-foreground">/{material.unit}</span>
+                        {referencePrice(material)}
+                        {material.product && <span className="block font-normal text-muted-foreground">Last checked: {material.product.lastCheckedAt}</span>}
                       </span>
                     </button>
                     <div className="flex flex-col gap-1">
+                      {material.product && <a href={material.product.sourceUrl} target="_blank" rel="noopener noreferrer" title="View source" aria-label={`View source for ${material.name}`} className="rounded-lg p-1.5 text-[10px] text-primary underline focus-visible:outline-2 focus-visible:outline-primary">Source</a>}
                       <button
                         type="button"
                         onClick={() => toggleFavorite(material.id)}
@@ -4981,12 +5271,12 @@ export function EditableFloorPlan3D(props: Props) {
 
             {selectedMaterialDefinition.target === "wall" && <div className="sticky bottom-0 z-10 mt-3 rounded-xl border bg-white p-3 shadow-lg">
               <p className="mb-2 text-xs" aria-live="polite">{selectedMaterialDefinition.name} → {paintScope==="all"?"ทุกผนังในแปลน":paintScope==="room"?`ผนังด้านใน ${paintRoom?.roomName ?? "ห้องที่เลือก"}`:paintScope==="selected"?"ผนังชิ้นที่เลือกทั้งสองฝั่ง":`ผนังที่เลือกของ ${paintRoom?.roomName ?? "ห้อง"}`}</p>
-              <Button type="button" className="w-full" disabled={!paintEnabled || (paintScope==="face" && !highlightedFaces[selected?.id ?? ""]?.length)} onClick={()=>applyMaterial(paintScope)}>3. ทาสีผนัง</Button>
+              <p className="text-xs text-muted-foreground">วางเมาส์เพื่อทดลองสี · คลิกสีเพื่อใช้กับบริเวณนี้</p>
               {!paintEnabled && <p className="mt-1 text-xs text-amber-700">เลือกห้องหรือผนังด้านบนก่อน</p>}
             </div>}
 
             <p className="mt-2 text-[10px] text-muted-foreground">
-              {selectedMaterialDefinition.target==="wall" ? "เลือกสีแล้วกดทาสีผนัง · ย้อนกลับได้ด้วย Undo" : `วัสดุที่เลือกใช้กับ ${targetLabel(selectedMaterialDefinition.target)} · เปิด Instant Apply เพื่อดูผลและราคาแบบเรียลไทม์`}
+              {`วางเมาส์เพื่อดูตัวอย่าง ${targetLabel(selectedMaterialDefinition.target)} · คลิกเพื่อใช้ · ย้อนกลับได้ด้วย Undo`}
             </p>
 
             <details open={selectedMaterialDefinition.target!=="wall"} className="mt-3">
@@ -5086,17 +5376,18 @@ export function EditableFloorPlan3D(props: Props) {
               ) : budget.lines.length === 0 ? (
                 <div className="mt-3 rounded-xl border border-blue-300/20 bg-blue-300/10 p-3 text-[10px] leading-5 text-blue-100">
                   <p className="font-semibold">ยังไม่เริ่มคิดราคา</p>
-                  <p className="mt-1 text-blue-100/80">สีและวัสดุที่เห็นหลังเจน 3D เป็นเพียงตัวอย่าง เริ่มคำนวณเมื่อเลือกวัสดุแล้วกดใช้กับวัตถุที่เลือกหรือใช้กับทั้งหมด</p>
+                  <p className="mt-1 text-blue-100/80">สีและวัสดุที่เห็นหลังเจน 3D เป็นเพียงตัวอย่าง เริ่มคำนวณเมื่อคลิกใช้วัสดุกับพื้นผิว</p>
                 </div>
               ) : (
                 <>
                   <div className="mt-3 max-h-[170px] space-y-1.5 overflow-y-auto pr-1">
                     {budget.lines.map((line) => (
                       <div key={line.materialId} className="flex items-center justify-between gap-3 text-[10px]">
-                        <span className="min-w-0 truncate text-slate-300">
+                        <span className="min-w-0 text-slate-300">
                           {line.name} · {line.quantity.toFixed(line.unit === "ชิ้น" ? 0 : 2)} {line.unit}
+                          {line.packageQuantity !== undefined && <span className="block text-slate-400">{line.packageQuantity} {line.packageUnit === "box" ? "กล่อง" : line.packageUnit === "piece" ? "ชิ้น" : "ชุด"} (ไม่มีเผื่อเศษ)</span>}
                         </span>
-                        <span className="shrink-0 font-semibold">{formatMoney(line.total)}</span>
+                        <span className="shrink-0 font-semibold">{line.total === null ? "Price unavailable" : formatMoney(line.total)}</span>
                       </div>
                     ))}
                   </div>
@@ -5110,8 +5401,9 @@ export function EditableFloorPlan3D(props: Props) {
           </div>
         )}
 
-        {editorView === "perspective" && (
-          <div className="absolute right-3 top-3 z-20 w-[164px] rounded-2xl border border-white/80 bg-white/92 p-2 shadow-xl backdrop-blur-md">
+        {!props.focusMode && editorView === "perspective" && buildTool !== "walk" && (
+          <details className="absolute right-3 top-3 z-20 w-[164px] rounded-2xl border border-white/80 bg-white/92 p-2 shadow-xl backdrop-blur-md">
+            <summary className="cursor-pointer list-none rounded-xl px-2 py-1 text-center text-xs font-medium text-foreground focus-visible:outline-2 focus-visible:outline-primary">มุมมองเพิ่มเติม</summary>
             <div className="grid grid-cols-3 gap-1.5">
               <Button type="button" size="icon-sm" variant="ghost" className="rounded-xl" title="หมุนซ้าย" onClick={() => runCamera("rotate-left")}>
                 <RotateCcw className="h-4 w-4" />
@@ -5158,10 +5450,10 @@ export function EditableFloorPlan3D(props: Props) {
                 โฟกัสวัตถุ
               </Button>
             )}
-          </div>
+          </details>
         )}
 
-        <div className="absolute bottom-40 sm:bottom-24 left-3 z-20 flex items-center gap-1.5 rounded-2xl border border-white/80 bg-white/92 p-2 shadow-xl backdrop-blur-md">
+        {!props.focusMode && buildTool !== "walk" && <div className="absolute bottom-40 sm:bottom-24 left-3 z-20 flex items-center gap-1.5 rounded-2xl border border-white/80 bg-white/92 p-2 shadow-xl backdrop-blur-md">
           <Button
             type="button"
             size="icon-sm"
@@ -5194,18 +5486,55 @@ export function EditableFloorPlan3D(props: Props) {
               <SlidersHorizontal className="h-4 w-4" />
             </Button>
           )}
-        </div>
+        </div>}
 
-        {selected && buildTool === "select" && editAction !== "material" && inspectorOpen && (
-          <div className="absolute top-40 right-3 z-30 max-h-[420px] w-[280px] overflow-y-auto rounded-2xl border border-white/80 bg-white/96 p-3 shadow-xl backdrop-blur-md">
+        {props.focusMode && selected && selectedMaterialTarget && !inspectorOpen && <div className="absolute right-3 top-16 z-30 w-[min(270px,calc(100%-24px))] rounded-2xl border border-white/80 bg-white/95 p-3 text-xs shadow-xl backdrop-blur-md" aria-label="Focused selection inspector">
+          <p className="font-semibold">{selectedFurnitureItem?.name ?? targetLabel(selectedMaterialTarget)}</p>
+          <p className="mt-1 text-muted-foreground">{selectedMaterialTarget === "wall" && selectedSurface ? selectedSurface.context === "interior" ? `Interior — ${selectedSurface.roomName ?? "Room"}` : "Exterior" : selected.roomName ?? "Selected surface"}</p>
+          <dl className="mt-3 space-y-1.5">
+            {selectedFurnitureDimensions && <><div className="flex justify-between gap-2"><dt>Width</dt><dd>{selectedFurnitureDimensions.widthM.toFixed(2)} m</dd></div><div className="flex justify-between gap-2"><dt>Depth</dt><dd>{selectedFurnitureDimensions.depthM.toFixed(2)} m</dd></div><div className="flex justify-between gap-2"><dt>Height</dt><dd>{selectedFurnitureDimensions.heightM.toFixed(2)} m</dd></div></>}
+            {!selectedFurnitureItem && <div className="flex justify-between gap-2"><dt>{selectedMaterialTarget === "wall" ? "Length" : selectedMaterialTarget === "floor" || selectedMaterialTarget === "ceiling" ? "Size" : "Width"}</dt><dd className="font-medium">{selectedMaterialTarget === "floor" || selectedMaterialTarget === "ceiling" ? `${formatDimension(selected.box.width, props.metersPerPixel)} × ${formatDimension(selected.box.height, props.metersPerPixel)}` : formatDimension(Math.max(selected.box.width, selected.box.height), props.metersPerPixel)}</dd></div>}
+            {selectedMaterialTarget === "wall" && <div className="flex justify-between gap-2"><dt>Thickness</dt><dd className="font-medium">{formatWallThickness(wallThicknessPx(selected.box), props.metersPerPixel)}</dd></div>}
+            {selectedMaterialTarget === "wall" && <div className="flex justify-between gap-2"><dt>Height</dt><dd className="font-medium">{wallHeightOf(selected).toFixed(2)} m</dd></div>}
+            <div className="flex justify-between gap-2"><dt>Material</dt><dd className="max-w-36 truncate text-right font-medium">{materialById(selectedMaterialTarget === "wall" ? selectedFinish?.materialId ?? selected.materialId : selected.materialId, selectedMaterialTarget).name}</dd></div>
+          </dl>
+          <div className="mt-3 flex gap-2">
+            <Button type="button" size="sm" variant="outline" className="flex-1" onClick={() => setInspectorOpen(true)}>Edit details</Button>
+            <Button type="button" size="sm" className="flex-1" onClick={() => { setMaterialCategory(selectedMaterialTarget === "floor" ? "floor-tile" : selectedMaterialTarget === "wall" ? "wall-paint" : selectedMaterialTarget); setMaterialsOpen(true) }}>Material</Button>
+          </div>
+        </div>}
+        {selected && buildTool === "walk" && inspectorOpen && selectedMaterialTarget && <div className={`absolute right-3 z-30 w-[270px] rounded-2xl border bg-white/96 p-3 text-xs shadow-xl ${props.focusMode ? "top-16" : "top-20"}`}>
+          {props.focusMode && <button type="button" className="float-right rounded px-1 text-muted-foreground focus-visible:outline-2 focus-visible:outline-primary" aria-label="Close details" onClick={() => setInspectorOpen(false)}>×</button>}
+          <p className="font-semibold">{targetLabel(selectedMaterialTarget)}</p>
+          <p className="mt-1 text-muted-foreground">{selectedMaterialTarget === "wall" ? selectedSurface?.context === "interior" ? `Interior — ${selectedSurface.roomName ?? "Room"}` : "Exterior" : selected.roomName ?? "Selected surface"}</p>
+          <div className="mt-3 rounded-xl bg-slate-50 p-2">{(() => { const material = materialById(selectedMaterialTarget === "wall" ? selectedFinish?.materialId ?? selected.materialId : selected.materialId,selectedMaterialTarget); return <><p className="font-semibold">{material.name}</p><p className="mt-1">{referencePrice(material)}</p>{material.product && <p className="mt-1 text-muted-foreground">Last checked: {material.product.lastCheckedAt} · <a href={material.product.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline">View source</a></p>}</> })()}</div>
+          <button type="button" className="mt-2 text-primary underline" onClick={() => setMaterialsOpen(true)}>Choose material</button>
+        </div>}
+        {selected && (buildTool === "select" || buildTool === "orbit") && inspectorOpen && (
+          <div className={`absolute right-3 z-30 overflow-y-auto rounded-2xl border border-white/80 bg-white/96 p-3 shadow-xl backdrop-blur-md ${props.focusMode ? "bottom-3 top-16 w-[min(340px,calc(100%-24px))]" : "top-44 max-h-[520px] w-[280px]"}`}>
             <div className="flex items-center justify-between gap-2">
               <div>
-                <p className="text-xs font-semibold text-foreground">คุณสมบัติวัตถุ</p>
-                <p className="text-[10px] text-muted-foreground">แก้ตัวเลขแล้วกด Enter หรือ “ใช้ค่า”</p>
+                <p className="text-xs font-semibold text-foreground">{selectedFurnitureItem?.name ?? targetLabel(selectedMaterialTarget ?? "wall")}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {selectedMaterialTarget === "wall" && wallHit?.id === selected.id
+                    ? selectedSurface?.context === "interior" ? `Interior — ${selectedSurface.roomName ?? "Room"}` : "Exterior"
+                    : selectedMaterialTarget === "floor" || selectedMaterialTarget === "ceiling"
+                      ? selected.roomName ?? "Room surface"
+                      : "แก้ตัวเลขแล้วกด Enter หรือ “ใช้ค่า”"}
+                </p>
               </div>
               <div className="flex items-center gap-1">
+                <Button type="button" size="icon-sm" variant={editAction === "move" ? "secondary" : "ghost"} className="rounded-xl" title="ย้ายชิ้นงาน" aria-label="ย้ายชิ้นงาน" onClick={() => chooseEditAction("move")}>
+                  <Move3D className="h-4 w-4" />
+                </Button>
+                <Button type="button" size="icon-sm" variant={editAction === "resize" ? "secondary" : "ghost"} className="rounded-xl" title="ปรับขนาดชิ้นงาน" aria-label="ปรับขนาดชิ้นงาน" onClick={() => chooseEditAction("resize")}>
+                  <Maximize2 className="h-4 w-4" />
+                </Button>
                 <Button type="button" size="icon-sm" variant="ghost" className="rounded-xl" title="ทำสำเนา" onClick={duplicateSelected}>
                   <Copy className="h-4 w-4" />
+                </Button>
+                <Button type="button" size="icon-sm" variant="ghost" className="rounded-xl text-destructive hover:text-destructive" title="ลบวัตถุที่เลือก" aria-label="ลบวัตถุที่เลือก" onClick={props.onDeleteSelected}>
+                  <Trash2 className="h-4 w-4" />
                 </Button>
                 <Button type="button" size="icon-sm" variant="ghost" className="rounded-xl" title="ปิดแผง" onClick={() => setInspectorOpen(false)}>
                   ×
@@ -5213,7 +5542,17 @@ export function EditableFloorPlan3D(props: Props) {
               </div>
             </div>
 
-            <div className="mt-3 flex items-end gap-2">
+            {selectedMaterialTarget && (() => {
+              const finish = materialById(selectedMaterialTarget === "wall" ? selectedFinish?.materialId ?? selected.materialId : selected.materialId, selectedMaterialTarget)
+              return <div className="mt-3 rounded-xl border bg-slate-50 p-2.5 text-[11px]">
+                <p className="font-semibold">Current material</p>
+                <p className="mt-1">{finish.name}</p>
+                <p className="mt-1 text-muted-foreground">{referencePrice(finish)}</p>
+                {finish.product && <p className="mt-1 text-muted-foreground">{finish.product.brand} · {finish.product.source.replace("_", " ")} · Last checked: {finish.product.lastCheckedAt} · <a href={finish.product.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-primary underline">View source</a></p>}
+              </div>
+            })()}
+
+            {!selectedFurnitureItem && <div className="mt-3 flex items-end gap-2">
               <label className="min-w-0 flex-1 text-[10px] font-medium text-muted-foreground">
                 ความยาว ({props.metersPerPixel ? "เมตร" : "px"})
                 <input
@@ -5229,7 +5568,22 @@ export function EditableFloorPlan3D(props: Props) {
               <Button type="button" size="sm" className="h-9 rounded-xl" onClick={applyExactLength}>
                 ใช้ค่า
               </Button>
-            </div>
+            </div>}
+
+            {selectedFurnitureItem && selectedFurnitureInstance && selectedFurnitureDimensions && <div className="mt-3 space-y-3 rounded-xl border bg-slate-50 p-3 text-xs" aria-label="Furniture properties">
+              <img src={selectedFurnitureItem.thumbnail} alt="" className="h-24 w-full rounded-lg object-cover" />
+              <dl className="space-y-1.5">
+                <div className="flex justify-between"><dt>Width</dt><dd>{selectedFurnitureDimensions.widthM.toFixed(2)} m</dd></div>
+                <div className="flex justify-between"><dt>Depth</dt><dd>{selectedFurnitureDimensions.depthM.toFixed(2)} m</dd></div>
+                <div className="flex justify-between"><dt>Height</dt><dd>{selectedFurnitureDimensions.heightM.toFixed(2)} m</dd></div>
+                <div className="flex justify-between"><dt>Position</dt><dd>{selectedFurnitureInstance.position.x.toFixed(2)}, {selectedFurnitureInstance.position.z.toFixed(2)} m</dd></div>
+              </dl>
+              <div className="flex items-end gap-2"><label className="min-w-0 flex-1 text-[11px]">Rotation (degrees)<input aria-label="Furniture rotation in degrees" type="number" value={furnitureRotationDraft} onChange={event => setFurnitureRotationDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") applyFurnitureRotation() }} className="mt-1 w-full rounded-lg border px-2 py-1.5" /></label><Button type="button" size="sm" onClick={() => applyFurnitureRotation()}>Apply</Button></div>
+              <div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={() => applyFurnitureRotation((selectedFurnitureInstance.rotationY * 180 / Math.PI) - 15)}>−15°</Button><Button type="button" size="sm" variant="outline" onClick={() => applyFurnitureRotation((selectedFurnitureInstance.rotationY * 180 / Math.PI) + 15)}>+15°</Button></div>
+              <div className="flex items-end gap-2"><label className="min-w-0 flex-1 text-[11px]">Scale<input aria-label="Furniture scale" type="number" min="0.25" max="4" step="0.05" value={furnitureScaleDraft} onChange={event => setFurnitureScaleDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") applyFurnitureScale() }} className="mt-1 w-full rounded-lg border px-2 py-1.5" /></label><Button type="button" size="sm" onClick={applyFurnitureScale}>Apply</Button></div>
+              <div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={duplicateSelected}>Duplicate</Button><Button type="button" size="sm" variant="outline" className="text-destructive" onClick={props.onDeleteSelected}>Delete</Button></div>
+              <p className="text-[10px] text-muted-foreground">{selectedFurnitureItem.license}</p>
+            </div>}
 
             {labelKind(selected.label) === "wall" && (
               <div className="mt-3 space-y-3 rounded-2xl bg-secondary/60 p-3">
@@ -5384,68 +5738,55 @@ export function EditableFloorPlan3D(props: Props) {
           </div>
         )}
 
-        {buildTool !== "orbit" && (
-        <div className="absolute bottom-3 left-1/2 z-30 w-[calc(100%-24px)] max-w-[900px] -translate-x-1/2 rounded-2xl border border-white/80 bg-white/95 p-1.5 shadow-2xl backdrop-blur-xl">
-          <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-8">
-            {([
-              { key: "orbit" as const, label: "หมุนดู", shortcut: "", icon: RotateCw },
-              { key: "select" as const, label: "เลือก", shortcut: "1", icon: MousePointer2 },
-              { key: "wall" as const, label: "ผนัง", shortcut: "2", icon: SquareDashed },
-              { key: "room" as const, label: "ห้อง", shortcut: "R", icon: RectangleHorizontal },
-              { key: "floor" as const, label: "พื้น", shortcut: "5", icon: Grid2X2 },
-
-              { key: "door" as const, label: "ประตู", shortcut: "3", icon: DoorOpen },
-              { key: "window" as const, label: "หน้าต่าง", shortcut: "4", icon: PanelTop },
-            ]).map((item) => {
-              const Icon = item.icon
-              const active = buildTool === item.key
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => chooseTool(item.key)}
-                  className={`group flex min-h-[50px] flex-col items-center justify-center rounded-xl border px-2 py-1.5 text-center transition ${
-                    active
-                      ? "border-primary bg-primary text-primary-foreground shadow-lg shadow-primary/20"
-                      : "border-transparent bg-secondary/60 text-foreground hover:border-primary/20 hover:bg-primary/10"
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                  <span className="mt-1 text-[11px] font-semibold">{item.label}</span>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-        )}
-
         <Canvas
+          data-testid="editor-3d-canvas"
           shadows
           dpr={[1, 1.6]}
           camera={{ position: [11, 10, 11], fov: 45, near: 0.1, far: 200 }}
           gl={{ antialias: true, preserveDrawingBuffer: true }}
           onPointerMissed={() => {
-            if (buildTool === "select" && editAction !== "move") props.onSelect(null)
+            if (buildTool === "select" && editAction !== "move") { props.onSelect(null); setContextHit(null) }
           }}
         >
           <FloorPlanScene
             {...props}
-            onSelect={(id, side, position) => {
+            detections={previewDetections}
+            committedDetections={props.detections}
+            onWalkLocked={setWalkLocked}
+            onExitWalk={() => chooseTool("orbit")}
+            placementFurnitureId={placementFurnitureId}
+            onFurniturePlaced={() => { setBuildTool("select"); setFurnitureCatalogOpen(false); setInspectorOpen(true) }}
+            onSelect={(id, side, position, hit) => {
               props.onSelect(id)
+              setContextHit(id && hit?.point ? { id, point: hit.point } : null)
+              if (id && !props.focusMode) setInspectorOpen(true)
               const clicked=props.detections.find(d=>d.id===id)
               if (materialsOpen && selectedMaterialDefinition.target==="wall" && clicked?.floorTiles?.length) {
                 setPaintRoomId(clicked.id); setPaintScope("room"); setWallHit(null)
               } else if (side) {
-                const facingRoom=clicked && rooms.find(r=>roomWallFaces(r,clicked).some(f=>f.side===side && position!==undefined && position>=f.start && position<=f.end))
-                if (facingRoom) setPaintRoomId(facingRoom.id)
+                const surface=clicked && position !== undefined ? resolveWallSurface(clicked, side, position, rooms) : null
+                setPaintRoomId(surface?.roomId ?? "")
                 setSelectedWallSide(side)
                 setPaintScope("face")
-                setWallHit(id && position !== undefined ? {id,position} : null)
-              } else if (id !== selected?.id) { setPaintScope(materialsOpen && selectedMaterialDefinition.target==="wall"?"room":"selected"); setWallHit(null) }
-              if (id && buildTool !== "orbit" && buildTool !== "select") setBuildTool("select")
+                setWallHit(id && position !== undefined ? {id,position,...hit} : null)
+                setMaterialCategory("wall-paint")
+                if (!props.focusMode || buildTool === "walk" || materialsOpen) setMaterialsOpen(true)
+              } else if (id !== selected?.id || buildTool === "walk") {
+                const target=clicked && targetForDetection(clicked)
+                if (buildTool === "walk" && target) { setMaterialCategory(target === "floor" ? "floor-tile" : target === "wall" ? "wall-paint" : target === "furniture" ? "furniture" : target); setMaterialsOpen(true) }
+                setPaintScope(buildTool === "walk" && target === "floor" ? "room" : materialsOpen && selectedMaterialDefinition.target==="wall"?"room":"selected")
+                setWallHit(null)
+              }
+              if (id && buildTool !== "orbit" && buildTool !== "select" && buildTool !== "walk") setBuildTool("select")
             }}
             highlightedFaces={highlightedFaces}
+            contextHit={contextHit}
+            contextLabel={selectedMaterialTarget === "wall" ? selectedSurface?.context === "interior" ? `Interior — ${selectedSurface.roomName ?? "Room"}` : selectedSurface?.context === "exterior" ? "Exterior" : "Wall" : selectedMaterialTarget === "floor" ? `${selected?.roomName ?? "Room"} Floor` : selectedFurnitureItem?.name ?? selected?.label ?? "Object"}
+            materialsOpen={materialsOpen}
+            walkLocked={walkLocked}
+            onContextAction={handleContextAction}
+            onContextRotate={applyFurnitureRotation}
+            selectedFace={selectedSurface ? { wallId: selectedSurface.wallId, side: selectedSurface.side, start: selectedSurface.start, end: selectedSurface.end } : undefined}
             highlightedRoomId={materialsOpen && paintScope === "room" ? paintRoom?.id : undefined}
             buildTool={buildTool}
             editAction={editAction}
@@ -5465,10 +5806,10 @@ export function EditableFloorPlan3D(props: Props) {
         </Canvas>
       </div>
 
-      <div className="flex items-center justify-between gap-2 border-t border-border bg-white px-4 py-2 text-[11px] text-muted-foreground">
+      {!props.focusMode && <div className="flex items-center justify-between gap-2 border-t border-border bg-white px-4 py-2 text-[11px] text-muted-foreground">
         <span>{buildTool === "orbit" ? "ลากเมาส์ซ้ายหมุนรอบบ้านได้ 360° · ลากขวาเลื่อน · ล้อเมาส์ซูม" : editAction === "move" ? "ลากวัตถุเพื่อย้ายเท่านั้น · เปลี่ยนโหมดเพื่อปรับขนาดหรือวัสดุ" : editAction === "resize" ? "ลากจุดจับเพื่อปรับขนาดเท่านั้น · เปลี่ยนโหมดเพื่อย้ายหรือเปลี่ยนวัสดุ" : editAction === "material" ? "เลือกชิ้นงานแล้วกำหนดวัสดุ · การลากไม่ขยับวัตถุ" : "คลิกเพื่อเลือก · การลากไม่ขยับวัตถุ"}</span>
         <span className="hidden font-medium text-foreground sm:inline">Snap: {snapLabel}{snapMode === "grid" ? ` ${gridLabel}` : ""}</span>
-      </div>
+      </div>}
     </div>
   )
 }

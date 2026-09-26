@@ -16,6 +16,7 @@ import {
   FileImage,
   FileText,
   Loader2,
+  Maximize2,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -40,7 +41,9 @@ import { Button } from "@/components/ui/button"
 import { clearActiveProject, loadActiveProject, saveActiveProject } from "@/lib/project-storage"
 import { analyzeFloorPlan } from "@/lib/floor-plan-quality"
 import { getPdfPageCountInBrowser, renderPdfPageInBrowser } from "@/lib/pdf-client"
-import { DEFAULT_MATERIAL } from "@/lib/materials"
+import { DEFAULT_MATERIAL, materialById, targetForDetection } from "@/lib/materials"
+import { furnitureCatalogItem, furnitureDimensionsOf, furnitureInstanceOf, resizeFurnitureUniform } from "@/lib/furniture"
+import { resizeWallThicknessAroundCenter as resizeWallThickness } from "@/lib/wall-thickness"
 import {
   boxFromEdges,
   clampBox,
@@ -48,6 +51,7 @@ import {
   colorByLabel,
   detectionsEqual,
   labelKind,
+  makeDetectionId,
   normalizeDetection,
   type Detection,
   type ImageSize,
@@ -218,30 +222,9 @@ function wallThickness(box: Detection["box"]) {
   return wallOrientation(box) === "horizontal" ? box.height : box.width
 }
 
-function resizeWallThickness(
-  box: Detection["box"],
-  targetThicknessPx: number,
-  imageSize: ImageSize,
-) {
-  const safeThickness = Math.max(4, Math.min(targetThicknessPx, Math.max(imageSize.width, imageSize.height)))
-  const center = boxCenter(box)
-  if (wallOrientation(box) === "horizontal") {
-    return clampBox(
-      boxFromEdges(box.x1, center.y - safeThickness / 2, box.x2, center.y + safeThickness / 2),
-      imageSize,
-      4,
-    )
-  }
-  return clampBox(
-    boxFromEdges(center.x - safeThickness / 2, box.y1, center.x + safeThickness / 2, box.y2),
-    imageSize,
-    4,
-  )
-}
-
 function formatThickness(valuePx: number, metersPerPixel: number | null) {
   if (!metersPerPixel) return `${Math.round(valuePx)} px`
-  return `${Math.round(valuePx * metersPerPixel * 100)} cm`
+  return `${Number((valuePx * metersPerPixel).toFixed(3))} m`
 }
 
 function summarizeCounts(detections: Detection[]) {
@@ -292,6 +275,8 @@ export default function UploadPage() {
   const [floorMaterialId, setFloorMaterialId] = useState(DEFAULT_MATERIAL.floor)
   const [knownLength, setKnownLength] = useState("")
   const [wallThicknessDraft, setWallThicknessDraft] = useState("")
+  const [furnitureRotationDraft, setFurnitureRotationDraft] = useState("")
+  const [furnitureScaleDraft, setFurnitureScaleDraft] = useState("")
   const [historyVersion, setHistoryVersion] = useState(0)
   const [isDropActive, setIsDropActive] = useState(false)
   const [phase, setPhase] = useState<ProcessingPhase>("idle")
@@ -301,6 +286,8 @@ export default function UploadPage() {
   const [isRestoring, setIsRestoring] = useState(true)
   const [leftPanelOpen, setLeftPanelOpen] = useState(true)
   const [rightPanelOpen, setRightPanelOpen] = useState(false)
+  const [focusMode, setFocusMode] = useState(false)
+  const rightPanelBeforeFocusRef = useRef(false)
   const [backendProgress, setBackendProgress] = useState(0)
   const [pdfSource, setPdfSource] = useState<File | null>(null)
   const [pdfPageCount, setPdfPageCount] = useState(0)
@@ -325,6 +312,13 @@ export default function UploadPage() {
   const countSummary = useMemo(() => summarizeCounts(editableDetections), [editableDetections])
   const qualityIssues = useMemo(() => imageSize ? analyzeFloorPlan(editableDetections, imageSize) : [], [editableDetections, imageSize])
   const selectedIsWall = selectedDetection ? labelKind(selectedDetection.label) === "wall" : false
+  const selectedFurnitureItem = selectedDetection ? furnitureCatalogItem(selectedDetection.furnitureCatalogId) : null
+  const selectedFurnitureInstance = useMemo(() => selectedFurnitureItem && selectedDetection && imageSize ? furnitureInstanceOf(selectedDetection, imageSize, metersPerPixel) : null, [selectedFurnitureItem, selectedDetection, imageSize, metersPerPixel])
+  const selectedFurnitureDimensions = selectedFurnitureItem && selectedDetection && imageSize ? furnitureDimensionsOf(selectedDetection, imageSize, metersPerPixel) : null
+  useEffect(() => {
+    setFurnitureRotationDraft(selectedFurnitureInstance ? (selectedFurnitureInstance.rotationY * 180 / Math.PI).toFixed(0) : "")
+    setFurnitureScaleDraft(selectedFurnitureInstance ? selectedFurnitureInstance.scale.y.toFixed(2) : "")
+  }, [selectedFurnitureInstance, selectedDetection?.id])
   const fileSummary = useMemo(() => {
     if (!file) return null
     return `${file.name} • ${(file.size / 1024 / 1024).toFixed(2)} MB`
@@ -339,7 +333,7 @@ export default function UploadPage() {
     const thicknessPx = wallThickness(selectedDetection.box)
     setWallThicknessDraft(
       metersPerPixel
-        ? Math.round(thicknessPx * metersPerPixel * 100).toString()
+        ? (thicknessPx * metersPerPixel).toFixed(3)
         : Math.round(thicknessPx).toString(),
     )
   }, [metersPerPixel, selectedDetection])
@@ -350,9 +344,29 @@ export default function UploadPage() {
     }
   }, [phase])
 
-  const showLeftPanel = !hasWorkspace || leftPanelOpen
+  const enterFocus = useCallback(() => {
+    if (!hasWorkspace) return
+    rightPanelBeforeFocusRef.current = rightPanelOpen
+    setRightPanelOpen(false)
+    setFocusMode(true)
+  }, [hasWorkspace, rightPanelOpen])
+  const exitFocus = useCallback(() => {
+    setFocusMode(false)
+    setRightPanelOpen(rightPanelBeforeFocusRef.current)
+  }, [])
+
+  useEffect(() => {
+    if (!focusMode) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    return () => { document.body.style.overflow = previousOverflow }
+  }, [focusMode])
+
+  const showLeftPanel = !focusMode && (!hasWorkspace || leftPanelOpen)
   const showRightPanel = hasWorkspace && workspaceView === "2d" && rightPanelOpen
-  const workspaceLayoutClass = !hasWorkspace
+  const workspaceLayoutClass = focusMode
+    ? "xl:grid-cols-[minmax(0,1fr)]"
+    : !hasWorkspace
     ? "xl:grid-cols-[300px_minmax(0,1fr)]"
     : workspaceView === "3d"
       ? showLeftPanel
@@ -502,6 +516,25 @@ export default function UploadPage() {
       const isTyping = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.tagName === "SELECT" || target?.isContentEditable
       if (isTyping || pendingAction || isEditorOpen || isPdfChooserOpen || isProcessing) return
 
+      if (!event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey && event.code === "KeyF" && hasWorkspace) {
+        event.preventDefault()
+        if (focusMode) exitFocus()
+        else enterFocus()
+        return
+      }
+      if (event.key === "Escape" && focusMode) {
+        if (workspaceView === "3d") return
+        if (workspaceView === "2d" && rightPanelOpen) {
+          event.preventDefault()
+          setRightPanelOpen(false)
+          return
+        }
+        queueMicrotask(() => {
+          if (!event.defaultPrevented && !document.pointerLockElement) exitFocus()
+        })
+        return
+      }
+
       const commandPressed = event.ctrlKey || event.metaKey
       const isKeyZ = event.code === "KeyZ" || event.key.toLowerCase() === "z"
       const isKeyY = event.code === "KeyY" || event.key.toLowerCase() === "y"
@@ -529,7 +562,7 @@ export default function UploadPage() {
 
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [deleteSelected, redo, selectedId, undo, pendingAction, isEditorOpen, isPdfChooserOpen, isProcessing])
+  }, [deleteSelected, redo, selectedId, undo, pendingAction, isEditorOpen, isPdfChooserOpen, isProcessing, hasWorkspace, focusMode, enterFocus, exitFocus, workspaceView, rightPanelOpen])
 
   useEffect(() => {
     function flush() {
@@ -956,7 +989,7 @@ export default function UploadPage() {
   function targetThicknessFromInput() {
     const value = Number(wallThicknessDraft)
     if (!Number.isFinite(value) || value <= 0) return null
-    return metersPerPixel ? value / 100 / metersPerPixel : value
+    return metersPerPixel ? value / metersPerPixel : value
   }
 
   function applyWallThickness(scope: "selected" | "all") {
@@ -993,10 +1026,34 @@ export default function UploadPage() {
     commitDetections(next)
     setWallThicknessDraft(
       metersPerPixel
-        ? valueCm.toString()
+        ? (valueCm / 100).toFixed(2)
         : Math.round(targetPx).toString(),
     )
     setError(null)
+  }
+
+  function applyFurnitureRotation(degrees = Number(furnitureRotationDraft)) {
+    if (!selectedDetection || !selectedFurnitureItem || !Number.isFinite(degrees)) return
+    const radians = (degrees % 360) * Math.PI / 180
+    commitDetections(editableDetections.map(item => item.id === selectedDetection.id ? { ...item, furnitureRotationY: radians } : item))
+    setFurnitureRotationDraft(degrees.toFixed(0))
+  }
+
+  function applyFurnitureScale() {
+    if (!selectedDetection || !selectedFurnitureInstance || !imageSize) return
+    const requested = Number(furnitureScaleDraft)
+    if (!Number.isFinite(requested) || requested < 0.25 || requested > 4) return
+    const factor = requested / selectedFurnitureInstance.scale.y
+    commitDetections(editableDetections.map(item => item.id === selectedDetection.id ? resizeFurnitureUniform(item, factor, imageSize) : item))
+  }
+
+  function duplicateSelectedFurniture() {
+    if (!selectedDetection || !selectedFurnitureItem || !imageSize) return
+    const offset = Math.max(8, imageSize.width * 0.025)
+    const box = selectedDetection.box
+    const copy = { ...selectedDetection, id: makeDetectionId("furniture"), box: clampBox(boxFromEdges(box.x1 + offset, box.y1 + offset, box.x2 + offset, box.y2 + offset), imageSize) }
+    commitDetections([...editableDetections, copy])
+    setSelectedId(copy.id)
   }
 
   return (
@@ -1050,8 +1107,8 @@ export default function UploadPage() {
         />
       )}
 
-      <div className="mx-auto max-w-[1900px]">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 sm:mb-8">
+      <div className={focusMode ? "w-full" : "mx-auto max-w-[1900px]"}>
+        <div className={`mb-6 flex flex-wrap items-center justify-between gap-3 sm:mb-8 ${focusMode ? "hidden" : ""}`}>
           <Button type="button" variant="ghost" className="rounded-2xl" onClick={() => { if (pendingSaveRef.current !== null) { window.clearTimeout(pendingSaveRef.current); flushSaveRef.current?.() } router.push("/") }}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             กลับหน้าแรก
@@ -1109,7 +1166,7 @@ export default function UploadPage() {
             <button type="button" className="ml-auto shrink-0 text-xs underline" onClick={() => { setError(null); setStorageMessage(null) }}>ปิดข้อความ</button>
           </div>
         )}
-        <div className={`grid gap-4 ${workspaceLayoutClass}`}>
+        <div className={`${focusMode ? "fixed inset-0 z-[90] grid gap-0 bg-background p-1.5 sm:p-2" : "grid gap-4"} ${workspaceLayoutClass}`} data-focus-mode={focusMode ? "true" : "false"}>
 
           {showLeftPanel && (
           <aside className="h-fit rounded-3xl border border-border bg-card p-4 shadow-sm xl:sticky xl:top-6">
@@ -1214,9 +1271,9 @@ export default function UploadPage() {
           </aside>
           )}
 
-          <div className="min-w-0 space-y-4">
-            <section className="relative overflow-hidden rounded-3xl border border-border bg-card p-2 shadow-sm sm:p-3">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-secondary/60 px-3 py-2">
+          <div className={focusMode ? "h-full min-h-0 min-w-0" : "min-w-0 space-y-4"}>
+            <section className={`relative overflow-hidden rounded-3xl border border-border bg-card shadow-sm ${focusMode ? "flex h-full min-h-0 flex-col p-0" : "p-2 sm:p-3"}`}>
+              {!focusMode && <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-secondary/60 px-3 py-2">
                 <div>
                   <p className="text-sm font-semibold">{workspaceView === "3d" ? "สำรวจและแก้ไขโมเดล 3D" : "แก้ไขแปลน / AI Detection"}</p>
                   <p className="hidden text-xs text-muted-foreground sm:block">
@@ -1225,6 +1282,8 @@ export default function UploadPage() {
                       : "เพิ่มวัตถุ → คลิกเลือก → ลากหรือปรับขนาด → เปิดดู 3D"}
                   </p>
                 </div>
+                <div className="flex items-center gap-2">
+                {hasWorkspace && <Button type="button" size="icon-sm" variant="outline" className="rounded-xl" aria-label="Enter Focus Mode" aria-keyshortcuts="F" title="Expand workspace (F)" onClick={enterFocus}><Maximize2 aria-hidden="true" className="h-4 w-4" /></Button>}
                 {hasWorkspace ? (
                   <div className="flex rounded-xl border border-border bg-background p-1">
                     <Button type="button" size="sm" variant={workspaceView === "2d" ? "default" : "ghost"} className="rounded-lg" onClick={() => setWorkspaceView("2d")}>
@@ -1237,7 +1296,8 @@ export default function UploadPage() {
                 ) : (
                   <span className="rounded-full bg-background px-3 py-1 text-xs text-muted-foreground">{file ? "Image ready" : "Waiting for upload"}</span>
                 )}
-              </div>
+                </div>
+              </div>}
 
               {isRestoring && (
                 <div className="flex min-h-[520px] items-center justify-center text-sm text-muted-foreground">
@@ -1263,8 +1323,12 @@ export default function UploadPage() {
 
               {hasWorkspace && previewDataUrl && imageSize && workspaceView === "2d" && (
                 <FloorPlan2DEditor
+                  focusMode={focusMode}
+                  onExitFocus={exitFocus}
+                  onSwitchWorkspace={setWorkspaceView}
                   imageUrl={previewDataUrl}
                   imageSize={imageSize}
+                  metersPerPixel={metersPerPixel}
                   detections={editableDetections}
                   selectedId={selectedId}
                   onSelect={setSelectedId}
@@ -1286,6 +1350,9 @@ export default function UploadPage() {
 
               {hasWorkspace && imageSize && workspaceView === "3d" && (
                 <EditableFloorPlan3D
+                  focusMode={focusMode}
+                  onExitFocus={exitFocus}
+                  onSwitchWorkspace={setWorkspaceView}
                   previewDataUrl={previewDataUrl ?? undefined}
                   imageUrl={previewDataUrl}
                   detections={editableDetections}
@@ -1305,6 +1372,21 @@ export default function UploadPage() {
                 />
               )}
 
+              {focusMode && workspaceView === "2d" && selectedDetection && !rightPanelOpen && (
+                <div className="absolute right-3 top-16 z-[60] w-[min(260px,calc(100%-24px))] rounded-2xl border border-border bg-white/95 p-3 text-xs shadow-xl backdrop-blur-md" aria-label="Selected object summary">
+                  <p className="font-semibold capitalize">{selectedFurnitureItem?.name ?? labelKind(selectedDetection.label)}</p>
+                  <p className="mt-1 text-muted-foreground">{selectedDetection.roomName ?? "Selected object"}</p>
+                  <dl className="mt-3 space-y-1.5">
+                    {!selectedFurnitureItem && <div className="flex justify-between gap-3"><dt>{selectedIsWall ? "Length" : ["floor", "ceiling"].includes(labelKind(selectedDetection.label)) ? "Size" : "Width"}</dt><dd className="font-medium">{["floor", "ceiling"].includes(labelKind(selectedDetection.label)) ? `${formatLength(selectedDetection.box.width, metersPerPixel)} × ${formatLength(selectedDetection.box.height, metersPerPixel)}` : formatLength(Math.max(selectedDetection.box.width, selectedDetection.box.height), metersPerPixel)}</dd></div>}
+                    {selectedFurnitureDimensions && <><div className="flex justify-between"><dt>Width</dt><dd>{selectedFurnitureDimensions.widthM.toFixed(2)} m</dd></div><div className="flex justify-between"><dt>Depth</dt><dd>{selectedFurnitureDimensions.depthM.toFixed(2)} m</dd></div><div className="flex justify-between"><dt>Height</dt><dd>{selectedFurnitureDimensions.heightM.toFixed(2)} m</dd></div></>}
+                    {selectedIsWall && <div className="flex justify-between gap-3"><dt>Thickness</dt><dd className="font-medium">{formatThickness(wallThickness(selectedDetection.box), metersPerPixel)}</dd></div>}
+                    {selectedIsWall && <div className="flex justify-between gap-3"><dt>Height</dt><dd className="font-medium">{(selectedDetection.wallHeightM ?? 2.8).toFixed(2)} m</dd></div>}
+                    {targetForDetection(selectedDetection) && <div className="flex justify-between gap-3"><dt>Material</dt><dd className="max-w-36 truncate text-right font-medium">{materialById(selectedDetection.materialId, targetForDetection(selectedDetection)!).name}</dd></div>}
+                  </dl>
+                  <Button type="button" size="sm" variant="outline" className="mt-3 w-full" onClick={() => setRightPanelOpen(true)}>Edit details</Button>
+                </div>
+              )}
+
               {isProcessing && (
                 <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-6 backdrop-blur-[2px]">
                   <div className="w-full max-w-md rounded-3xl border border-white/20 bg-white/95 p-6 text-center shadow-2xl">
@@ -1321,7 +1403,7 @@ export default function UploadPage() {
           </div>
 
           {showRightPanel && (
-          <aside className="h-fit min-h-[560px] overflow-hidden rounded-3xl border border-border bg-card p-5 shadow-sm xl:sticky xl:top-6">
+          <aside className={`${focusMode ? "fixed bottom-2 right-2 top-16 z-[80] w-[min(370px,calc(100%-16px))] overflow-y-auto rounded-2xl" : "h-fit min-h-[560px] overflow-hidden rounded-3xl xl:sticky xl:top-6"} border border-border bg-card p-5 shadow-sm`}>
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">
@@ -1331,7 +1413,7 @@ export default function UploadPage() {
                   คลิกวัตถุบนแปลนเพื่อแก้รายละเอียด หรือกำหนดมาตราส่วนจริง
                 </p>
               </div>
-              <ScanSearch className="h-5 w-5 text-primary" />
+              {focusMode ? <Button type="button" size="sm" variant="ghost" onClick={() => setRightPanelOpen(false)} aria-label="Close details">Close</Button> : <ScanSearch className="h-5 w-5 text-primary" />}
             </div>
 
             {!hasWorkspace && (
@@ -1448,11 +1530,12 @@ export default function UploadPage() {
                             </div>
                             <div className="mt-2 flex items-end gap-2">
                               <label className="min-w-0 flex-1 text-[11px] text-muted-foreground">
-                                กำหนดเอง ({metersPerPixel ? "cm" : "px"})
+                                กำหนดเอง ({metersPerPixel ? "m" : "px"})
                                 <input
+                                  aria-label={metersPerPixel ? "Wall thickness in meters" : "Wall thickness in pixels"}
                                   type="number"
-                                  min="1"
-                                  step={metersPerPixel ? "1" : "1"}
+                                  min={metersPerPixel ? "0.01" : "4"}
+                                  step={metersPerPixel ? "0.01" : "1"}
                                   value={wallThicknessDraft}
                                   onChange={(event) => setWallThicknessDraft(event.target.value)}
                                   onKeyDown={(event) => {
@@ -1488,19 +1571,24 @@ export default function UploadPage() {
                               </Button>
                             </div>
                             <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
-                              ปรับโดยยึดแนวกึ่งกลางไว้ จึงไม่ทำให้ตำแหน่งผนังเลื่อน
+                              {metersPerPixel ? "ปรับโดยยึดแนวกึ่งกลางไว้ จึงไม่ทำให้ตำแหน่งผนังเลื่อน" : "Set scale to edit real dimensions. Drag side handles or enter thickness in pixels."}
                             </p>
                           </div>
                         )}
                         <p className="rounded-xl bg-primary/10 px-3 py-2 text-[11px] leading-relaxed text-primary">
-                          ลากตัววัตถุเพื่อย้าย ลากจุดปลายเพื่อปรับความยาว และปรับความหนาจากช่องด้านบน
+                          ลากตัววัตถุเพื่อย้าย ลากจุดกลมเพื่อปรับความยาว และลากแถบข้างเพื่อปรับความหนา
                         </p>
                       </div>
                     )}
 
                     {workspaceView === "2d" && (
                       <div className="mt-3 rounded-xl bg-background p-3 text-xs text-muted-foreground">
-                        ขนาด: <span className="font-medium text-foreground">{formatLength(selectedDetection.box.width, metersPerPixel)} × {formatLength(selectedDetection.box.height, metersPerPixel)}</span>
+                        {selectedIsWall ? (
+                          <dl className="space-y-1.5">
+                            <div className="flex justify-between gap-2"><dt>Length</dt><dd className="font-medium text-foreground">{formatLength(Math.max(selectedDetection.box.width, selectedDetection.box.height), metersPerPixel)}</dd></div>
+                            <div className="flex justify-between gap-2"><dt>Height</dt><dd className="font-medium text-foreground">{(selectedDetection.wallHeightM ?? 2.8).toFixed(2)} m</dd></div>
+                          </dl>
+                        ) : <>ขนาด: <span className="font-medium text-foreground">{formatLength(selectedDetection.box.width, metersPerPixel)} × {formatLength(selectedDetection.box.height, metersPerPixel)}</span></>}
                         {selectedIsWall && (
                           <div className="mt-2 rounded-xl border border-border bg-secondary/40 p-2">
                             <div className="flex items-center justify-between">
@@ -1509,16 +1597,32 @@ export default function UploadPage() {
                             </div>
                             <div className="mt-2 flex gap-2">
                               <input
+                                aria-label={metersPerPixel ? "Wall thickness in meters" : "Wall thickness in pixels"}
                                 type="number"
+                                min={metersPerPixel ? "0.01" : "4"}
+                                step={metersPerPixel ? "0.01" : "1"}
                                 value={wallThicknessDraft}
                                 onChange={(event) => setWallThicknessDraft(event.target.value)}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") applyWallThickness("selected")
+                                }}
                                 className="h-8 min-w-0 flex-1 rounded-lg border border-input bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring/40"
-                                placeholder={metersPerPixel ? "cm" : "px"}
+                                placeholder={metersPerPixel ? "m" : "px"}
                               />
                               <Button type="button" size="sm" className="h-8 rounded-lg" onClick={() => applyWallThickness("selected")}>ใช้</Button>
                             </div>
+                            {!metersPerPixel && <p className="mt-2 text-[11px]">Set scale to edit real dimensions. Drag the side handles or enter pixels here.</p>}
                           </div>
                         )}
+                        {selectedFurnitureItem && selectedFurnitureDimensions && selectedFurnitureInstance && <div className="mt-3 space-y-3 rounded-xl border border-border bg-secondary/40 p-3 text-xs" aria-label="2D furniture properties">
+                          <p className="font-semibold text-foreground">{selectedFurnitureItem.name}</p>
+                          <dl className="space-y-1"><div className="flex justify-between"><dt>Width</dt><dd>{selectedFurnitureDimensions.widthM.toFixed(2)} m</dd></div><div className="flex justify-between"><dt>Depth</dt><dd>{selectedFurnitureDimensions.depthM.toFixed(2)} m</dd></div><div className="flex justify-between"><dt>Height</dt><dd>{selectedFurnitureDimensions.heightM.toFixed(2)} m</dd></div><div className="flex justify-between"><dt>Position</dt><dd>{selectedFurnitureInstance.position.x.toFixed(2)}, {selectedFurnitureInstance.position.z.toFixed(2)} m</dd></div></dl>
+                          <label className="block">Rotation (degrees)<input aria-label="Furniture rotation in degrees" type="number" value={furnitureRotationDraft} onChange={event => setFurnitureRotationDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") applyFurnitureRotation() }} className="mt-1 h-8 w-full rounded-lg border px-2" /></label>
+                          <div className="flex gap-1"><Button type="button" size="sm" variant="outline" onClick={() => applyFurnitureRotation((selectedFurnitureInstance.rotationY * 180 / Math.PI) - 15)}>−15°</Button><Button type="button" size="sm" variant="outline" onClick={() => applyFurnitureRotation((selectedFurnitureInstance.rotationY * 180 / Math.PI) + 15)}>+15°</Button><Button type="button" size="sm" onClick={() => applyFurnitureRotation()}>Apply rotation</Button></div>
+                          <label className="block">Scale<input aria-label="Furniture scale" type="number" min="0.25" max="4" step="0.05" value={furnitureScaleDraft} onChange={event => setFurnitureScaleDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") applyFurnitureScale() }} className="mt-1 h-8 w-full rounded-lg border px-2" /></label>
+                          <Button type="button" size="sm" onClick={applyFurnitureScale}>Apply scale</Button>
+                          <div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={duplicateSelectedFurniture}>Duplicate</Button><Button type="button" size="sm" variant="outline" className="text-destructive" onClick={deleteSelected}>Delete</Button></div>
+                        </div>}
                       </div>
                     )}
                   </div>

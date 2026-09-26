@@ -37,6 +37,7 @@ with sync_playwright() as p:
     page.goto('http://localhost:3000/upload')
     page.get_by_label('เปิดไฟล์โปรเจกต์',exact=True).set_input_files(dict(name='surface.sketch2spec.json',mimeType='application/json',buffer=json.dumps(project).encode()))
     page.get_by_role('button',name='3D Editor',exact=True).click()
+    page.get_by_text('เครื่องมือเพิ่มเติม · จัดแนว แบ่งห้อง เลือกชิ้นงานที่ถูกบัง',exact=True).click()
     page.get_by_role('button',name='แบ่งพื้นตามห้อง',exact=True).click()
     d=wait_saved(page,lambda d:len([x for x in d if x.get('floorTiles')])==3)
     assert len([x for x in d if x['label'] in ('door','window')])==1
@@ -46,13 +47,21 @@ with sync_playwright() as p:
         edge=r['box']['x2'] if r['box']['x2']<shared['box']['x1']+1 else r['box']['x1']
         assert min(abs(edge-shared['box']['x1']),abs(edge-shared['box']['x2']))<1e-7
     page.wait_for_timeout(1600)
-    page.mouse.click(700,740)
-    page.get_by_title('เลือกวัสดุและดูงบประมาณ',exact=True).click()
+    # Probe the visible central wall instead of relying on a screen pixel that
+    # changes when the calibrated house size or viewport changes.
+    canvas=page.get_by_test_id('editor-3d-canvas');bounds=canvas.bounding_box()
+    found=False
+    for fy in (.38,.45,.52,.59,.66,.73):
+        for fx in (.36,.42,.48,.54,.60,.66):
+            page.mouse.click(bounds['x']+bounds['width']*fx,bounds['y']+bounds['height']*fy)
+            if page.get_by_label('เลือกวัตถุในโมเดล',exact=True).input_value()=='shared' and page.get_by_role('button',name='ผนังเดียว',exact=True).get_attribute('aria-pressed')=='true':
+                found=True;break
+        if found:break
+    assert found,'clicking the visible shared wall should select one physical face'
     expect(page.get_by_role('button',name='ผนังเดียว',exact=True)).to_have_attribute('aria-pressed','true')
     expect(page.get_by_label('เลือกวัตถุในโมเดล',exact=True)).to_have_value('shared')
     page.get_by_role('button',name=re.compile('อิฐแดง')).click()
     page.screenshot(path=str(OUT/'surface-before-paint.png'),full_page=True)
-    page.get_by_role('button',name='3. ทาสีผนัง',exact=True).click()
     d=wait_saved(page,lambda d:any(x['id']=='shared' and x.get('wallFinishes') for x in d))
     f=next(x for x in d if x['id']=='shared')['wallFinishes']
     assert len(f)==1 and f[0]['side']=='positive' and (f[0]['end']<.5 or f[0]['start']>.5),f
@@ -60,7 +69,6 @@ with sync_playwright() as p:
     page.get_by_label('ห้องที่จะทาสีผนัง',exact=True).select_option(other['id'])
     page.get_by_role('button',name=re.compile(r'^\d+\. ด้านซ้าย$')).click()
     page.get_by_role('button',name=re.compile('คอนกรีตเปลือย')).click()
-    page.get_by_role('button',name='3. ทาสีผนัง',exact=True).click()
     d=wait_saved(page,lambda d:any(x['id']=='shared' and len(x.get('wallFinishes',[]))==2 for x in d))
     final=next(x for x in d if x['id']=='shared')['wallFinishes']
     assert f[0] in final and all(x['side']=='positive' for x in final)
