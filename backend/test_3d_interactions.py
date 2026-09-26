@@ -66,12 +66,14 @@ with sync_playwright() as p:
     page.locator('select[title="ใช้กับการวาด การย่อ-ขยาย และการขยับด้วยเครื่องมือเลือก"]').select_option('grid')
     page.mouse.click(cx+2,cy+8)
     page.wait_for_timeout(700)
-    expect(page.get_by_role('button',name='แก้ขนาด',exact=True)).to_be_visible()
+    expect(page.get_by_role('button',name='ปรับขนาดชิ้นงาน',exact=True)).to_be_visible()
     expect(page.get_by_title('Undo',exact=True)).to_be_disabled()
     assert saved(page)[0]['box']==wall['box']
     report('selection with grid snapping does not move object or add undo entry')
     page.screenshot(path=str(OUT/'3d-interactions.png'),full_page=True)
     assert page.evaluate('([x,y])=>document.elementFromPoint(x,y).tagName',[cx+2,cy+8])=='CANVAS'
+    page.get_by_role('button',name='ย้ายชิ้นงาน',exact=True).click()
+    page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
     page.mouse.move(cx+2,cy+8)
     page.mouse.down()
     page.mouse.move(cx+42,cy+38,steps=8)
@@ -88,6 +90,8 @@ with sync_playwright() as p:
     wait_saved(page,lambda d:d[0]['box']==wall['box'])
     report('drag undo and redo restore exact coordinates')
     for cancel in ['Escape','pointercancel','blur']:
+        page.get_by_role('button',name='ย้ายชิ้นงาน',exact=True).click()
+        page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
         page.mouse.move(cx+2,cy+8)
         page.mouse.down()
         page.mouse.move(cx+42,cy+38,steps=8)
@@ -101,6 +105,8 @@ with sync_playwright() as p:
         expect(page.get_by_title('Undo',exact=True)).to_be_disabled()
         report(cancel+' rolls back active drag without history entry')
     # The endpoint sphere extends past the wall silhouette in top view.
+    page.get_by_role('button',name='ปรับขนาดชิ้นงาน',exact=True).click()
+    page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
     for shift in [True,False]:
         # Locate the actual resize target after responsive camera fitting.
         endpoint = None
@@ -124,7 +130,8 @@ with sync_playwright() as p:
         page.get_by_title('Undo',exact=True).click()
         wait_saved(page,lambda d:d[0]['box']==wall['box'])
         report('wall endpoint resize '+('bypasses grid with Shift' if shift else 'snaps to grid'))
-    for tool,count in [('ผนัง',2),('ห้อง',6),('พื้น',2)]:
+    page.get_by_role('button',name='More tools',exact=True).click()
+    for tool,count in [('Add wall',2),('Draw room',6),('Draw floor',2)]:
         page.get_by_role('button',name=tool,exact=True).click()
         page.evaluate('() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))')
         page.mouse.move(cx-170,cy-140)
@@ -136,12 +143,13 @@ with sync_playwright() as p:
         page.get_by_title('Undo',exact=True).click()
         wait_saved(page,lambda d:len(d)==1)
         report(tool+' draws objects and undo removes the entire gesture')
-    page.get_by_role('button',name='ห้อง',exact=True).click()
+    page.get_by_role('button',name='Draw room',exact=True).click()
     page.evaluate('() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))')
     page.mouse.move(cx+2,cy+8); page.mouse.down(); page.mouse.move(cx+140,cy-130,steps=12); page.mouse.up()
     connected=wait_saved(page,lambda d:len(d)>1)
     assert next(x for x in connected if x['id']=='test-wall')['box']==wall['box']
-    expect(page.get_by_role('button',name='เลือก',exact=True)).to_have_attribute('aria-pressed','true')
+    expect(page.get_by_role('button',name='Select',exact=True)).to_have_attribute('aria-pressed','true')
+    page.get_by_text('เครื่องมือเพิ่มเติม · จัดแนว แบ่งห้อง เลือกชิ้นงานที่ถูกบัง',exact=True).click()
     new_id=page.get_by_label('เลือกวัตถุในโมเดล',exact=True).input_value()
     assert new_id and new_id!='test-wall'
     page.get_by_role('button',name='ลบวัตถุที่เลือก',exact=True).click()
@@ -151,7 +159,7 @@ with sync_playwright() as p:
     page.get_by_title('Undo',exact=True).click()
     wait_saved(page,lambda d:len(d)==1)
     report('room starts on an existing wall; new wall deletes and complete room creation undoes')
-    page.get_by_role('button',name='พื้น',exact=True).click()
+    page.get_by_role('button',name='Draw floor',exact=True).click()
     page.mouse.move(cx-170,cy-140)
     page.mouse.down()
     page.mouse.move(cx-60,cy-70,steps=8)
@@ -159,7 +167,7 @@ with sync_playwright() as p:
     page.mouse.up()
     page.wait_for_timeout(400)
     assert len(saved(page))==1
-    expect(page.get_by_role('button',name='เลือก',exact=True)).to_have_attribute('aria-pressed','true')
+    expect(page.get_by_role('button',name='Select',exact=True)).to_have_attribute('aria-pressed','true')
     expect(page.get_by_title('Undo',exact=True)).to_be_disabled()
     report('Escape cancels drawing and returns to select')
     page.screenshot(path=str(OUT/'3d-interactions.png'),full_page=True)

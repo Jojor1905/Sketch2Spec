@@ -5,9 +5,9 @@ import type { Detection, WallSide } from "@/lib/floor-plan"
 
 export type RoomSurface = { wallId: string; side: WallSide; start: number; end: number }
 
-export function WallPaintPicker({ rooms, detections, room, scope, selectedId, side, position, onRoom, onScope, onSurface, onRebuild }: {
+export function WallPaintPicker({ rooms, detections, room, scope, selectedId, side, position, exterior = false, onRoom, onScope, onSurface, onRebuild }: {
   rooms: Detection[]; detections: Detection[]; room: Detection | null; scope: PaintScope
-  selectedId: string | null; side: WallSide; position?: number
+  selectedId: string | null; side: WallSide; position?: number; exterior?: boolean
   onRoom: (id: string) => void; onScope: (scope: PaintScope) => void
   onSurface: (surface: RoomSurface) => void; onRebuild: () => void
 }) {
@@ -22,7 +22,7 @@ export function WallPaintPicker({ rooms, detections, room, scope, selectedId, si
     <div className="grid grid-cols-3 gap-1" role="group" aria-label="ทาสีผนังแบบไหน">
       {([{scope:"room",label:"ทั้งห้อง"},{scope:"face",label:"ผนังเดียว"},{scope:"all",label:"ทั้งแปลน"}] as const).map(option=><button key={option.scope} type="button" aria-pressed={scope===option.scope} onClick={()=>onScope(option.scope)} className={`rounded-lg border px-1 py-2 text-xs font-medium ${scope===option.scope?"border-primary bg-primary text-white":"bg-white"}`}>{option.label}</button>)}
     </div>
-    {(scope==="room" || scope==="face") && <>
+    {(scope==="room" || (scope==="face" && !exterior)) && <>
       <label className="block text-xs font-medium">ห้องที่จะทาสี
         <select aria-label="ห้องที่จะทาสีผนัง" value={room?.id ?? ""} onChange={e=>onRoom(e.target.value)} className="mt-1 w-full rounded-lg border bg-white p-2">
           <option value="" disabled>เลือกห้อง</option>

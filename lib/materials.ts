@@ -1,6 +1,8 @@
 import { floorAreaPx } from "./rooms";
 import type { Detection, ImageSize } from "./floor-plan";
 import { labelKind } from "./floor-plan";
+import { SCG_PRODUCTS, type ScgProduct } from "./scg-catalog";
+import { netWallFaceAreaM2, openingsForWalls } from "./openings";
 
 export type MaterialTarget =
   "wall" | "door" | "window" | "floor" | "ceiling" | "furniture";
@@ -61,13 +63,14 @@ export type MaterialDefinition = {
     ao?: string;
   };
   previewImage?: string;
+  product?: ScgProduct;
   textureRotation?: number;
   normalStrength?: number;
-  price: number;
+  price: number | null;
   unit: "m²" | "ชิ้น";
 };
 
-export const MATERIALS: MaterialDefinition[] = [
+const DEMO_MATERIALS: MaterialDefinition[] = [
   {
     id: "wall-paint-white",
     target: "wall",
@@ -530,6 +533,23 @@ export const MATERIALS: MaterialDefinition[] = [
   },
 ];
 
+/** The adapter owns rendering defaults; source records remain separate from the scene. */
+function adaptScgProduct(product: ScgProduct): MaterialDefinition {
+  const category: MaterialCategory = product.target === "floor" ? "floor-tile"
+    : product.target === "wall" ? "wall-paint" : product.target;
+  const unit = product.target === "door" || product.target === "window" ? "ชิ้น" : "m²";
+  const price = product.referencePrice && product.sellUnit === "m2" ? product.referencePrice : null;
+  return {
+    id: product.id, target: product.target, category, name: product.productName,
+    description: `${product.brand} · ${product.category}`,
+    color: product.preview.color, textureStyle: product.preview.style,
+    textureScale: 1, roughness: product.target === "window" ? 0.18 : 0.78,
+    metalness: 0, price, unit, product,
+  };
+}
+
+export const MATERIALS: MaterialDefinition[] = [...DEMO_MATERIALS, ...SCG_PRODUCTS.map(adaptScgProduct)];
+
 export const DEFAULT_MATERIAL: Record<MaterialTarget, string> = {
   wall: "wall-paint-white",
   door: "door-oak",
@@ -590,13 +610,11 @@ export type BudgetLine = {
   category: MaterialCategory;
   quantity: number;
   unit: "m²" | "ชิ้น";
-  unitPrice: number;
-  total: number;
+  unitPrice: number | null;
+  total: number | null;
+  packageQuantity?: number;
+  packageUnit?: "box" | "piece" | "set";
 };
-
-function wallLengthPx(detection: Detection) {
-  return Math.max(detection.box.width, detection.box.height);
-}
 
 function wallHeightM(detection: Detection) {
   const value = Number(detection.wallHeightM ?? 2.8);
@@ -638,12 +656,13 @@ export function calculateBudget(
   }
 
   const grouped = new Map<string, BudgetLine>();
+  const openingsByWall = openingsForWalls(detections,_imageSize);
   const add = (material: MaterialDefinition, quantity: number) => {
     if (!Number.isFinite(quantity) || quantity <= 0) return;
     const existing = grouped.get(material.id);
     if (existing) {
       existing.quantity += quantity;
-      existing.total = existing.quantity * existing.unitPrice;
+      existing.total = existing.unitPrice === null ? null : existing.quantity * existing.unitPrice;
       return;
     }
     grouped.set(material.id, {
@@ -654,7 +673,7 @@ export function calculateBudget(
       quantity,
       unit: material.unit,
       unitPrice: material.price,
-      total: quantity * material.price,
+      total: material.price === null ? null : quantity * material.price,
     });
   };
 
@@ -662,13 +681,15 @@ export function calculateBudget(
     const target = targetForDetection(detection);
     if (!target) return;
     if (target === "wall") {
-      const oneSideArea = wallLengthPx(detection) * metersPerPixel * wallHeightM(detection);
-      const covered = (detection.wallFinishes ?? []).reduce((sum, finish) => {
-        const fraction = Math.max(0, finish.end - finish.start);
-        add(materialById(finish.materialId, "wall"), oneSideArea * fraction);
-        return sum + fraction;
+      const openings = openingsByWall.get(detection.id) ?? [];
+      const height = wallHeightM(detection);
+      const fullFace = netWallFaceAreaM2(detection,openings,metersPerPixel,height);
+      const finishedArea = (detection.wallFinishes ?? []).reduce((sum, finish) => {
+        const area = netWallFaceAreaM2(detection,openings,metersPerPixel,height,finish.start,finish.end);
+        add(materialById(finish.materialId, "wall"),area);
+        return sum + area;
       }, 0);
-      if (detection.materialApplied && detection.materialId) add(materialById(detection.materialId, "wall"), oneSideArea * Math.max(0, 2 - covered));
+      if (detection.materialApplied && detection.materialId) add(materialById(detection.materialId, "wall"), Math.max(0,2*fullFace-finishedArea));
       return;
     }
     // The initial generated model uses preview materials only. Add a BOQ line
@@ -678,7 +699,7 @@ export function calculateBudget(
     if (target === "door") {
       add(material, 1);
     } else if (target === "window") {
-      add(material, openingAreaM2(detection, metersPerPixel));
+      add(material, material.unit === "ชิ้น" ? 1 : openingAreaM2(detection, metersPerPixel));
     } else if (target === "furniture") {
       add(material, 1);
     } else {
@@ -691,11 +712,19 @@ export function calculateBudget(
 
   const floorAreaM2 = manualFloorAreaM2(detections, metersPerPixel);
 
-  const lines = Array.from(grouped.values()).map((line) => ({
-    ...line,
-    quantity: Number(line.quantity.toFixed(2)),
-    total: Math.round(line.total),
-  }));
-  const subtotal = lines.reduce((sum, line) => sum + line.total, 0);
+  const lines = Array.from(grouped.values()).map((line) => {
+    const product = materialById(line.materialId).product;
+    const packageQuantity = product?.coveragePerPackageM2 && line.unit === "m²"
+      ? Math.ceil(line.quantity/product.coveragePerPackageM2)
+      : undefined;
+    return {
+      ...line,
+      quantity: Number(line.quantity.toFixed(2)),
+      total: line.total === null ? null : Math.round(line.total),
+      packageQuantity,
+      packageUnit: packageQuantity === undefined ? undefined : product?.sellUnit as "box" | "piece" | "set" | undefined,
+    };
+  });
+  const subtotal = lines.reduce((sum, line) => sum + (line.total ?? 0), 0);
   return { lines, subtotal, hasScale: true, floorAreaM2 };
 }

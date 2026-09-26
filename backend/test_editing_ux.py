@@ -79,7 +79,7 @@ with sync_playwright() as p:
     page.screenshot(path=str(OUT/'editing-2d-ux.png'),full_page=True)
     report(f'AI result with {detected} objects remains directly editable')
     page.get_by_role('button',name='3D Editor',exact=True).click()
-    orbit=page.get_by_role('button',name='หมุนดู 360°',exact=True)
+    orbit=page.get_by_role('navigation',name='3D editor tools').get_by_role('button',name='Orbit',exact=True)
     expect(orbit).to_have_attribute('aria-pressed','true')
     canvas=page.locator('canvas')
     expect(canvas).to_be_visible()
@@ -111,10 +111,11 @@ with sync_playwright() as p:
     assert full_delta < half_delta*0.35, 'Full turn did not return close to original view'
     assert saved(page)['detections']==before, 'Orbit mutated object geometry'
     report('left mouse drag makes a full 360-degree orbit without moving objects')
-    page.get_by_role('button',name='แก้ไขวัตถุ',exact=True).click()
-    expect(page.get_by_role('button',name='แก้ไขวัตถุ',exact=True)).to_have_attribute('aria-pressed','true')
+    select=page.get_by_role('navigation',name='3D editor tools').get_by_role('button',name='Select',exact=True)
+    select.click()
+    expect(select).to_have_attribute('aria-pressed','true')
     orbit.click()
-    page.get_by_role('button',name='คืนมุมกล้อง',exact=True).click()
+    page.get_by_role('button',name='กลับมุมมองหลัก',exact=True).click()
     page.wait_for_timeout(1200)
     page.screenshot(path=str(OUT/'editing-3d-ux.png'),full_page=True)
     report('visible orbit/edit mode switch and camera reset work')

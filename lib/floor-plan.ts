@@ -33,6 +33,14 @@ export type Detection = {
   floorTiles?: FloorTile[]
   wallFinishes?: WallFinish[]
   objectHeightM?: number
+  /** New prefab identity and transform; the existing box remains the shared 2D footprint. */
+  furnitureCatalogId?: string
+  furnitureRotationY?: number
+  furnitureHeightScale?: number
+  /** Hide the object in the 3D edit workspace without removing its geometry. */
+  hiddenInEditor?: boolean
+  /** Lightweight project-local favorite marker for placed objects. */
+  favorite?: boolean
 }
 
 export type ImageSize = {
@@ -84,6 +92,11 @@ export function normalizeDetection(
       detection.materialRotation === undefined ? undefined : Number(detection.materialRotation),
     objectHeightM:
       detection.objectHeightM === undefined ? undefined : Number(detection.objectHeightM),
+    furnitureCatalogId: typeof detection.furnitureCatalogId === "string" ? detection.furnitureCatalogId : undefined,
+    furnitureRotationY: detection.furnitureRotationY === undefined ? undefined : Number(detection.furnitureRotationY),
+    furnitureHeightScale: detection.furnitureHeightScale === undefined ? undefined : Number(detection.furnitureHeightScale),
+    hiddenInEditor: detection.hiddenInEditor === true ? true : undefined,
+    favorite: detection.favorite === true ? true : undefined,
   }
 }
 
@@ -110,6 +123,11 @@ export function clampBox(box: DetectionBox, image: ImageSize, minSize = 4): Dete
   const y1 = Math.min(Math.max(box.y1, 0), Math.max(0, image.height - height))
 
   return boxFromEdges(x1, y1, x1 + width, y1 + height)
+}
+
+/** Calibrated projects use metres; uncalibrated previews use the existing 14-unit scene span. */
+export function worldScaleFor(image: ImageSize, metersPerPixel: number | null) {
+  return metersPerPixel && metersPerPixel > 0 ? metersPerPixel : 14 / Math.max(image.width, image.height, 1)
 }
 
 export function labelKind(label: string) {

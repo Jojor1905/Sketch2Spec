@@ -10,8 +10,10 @@ type BudgetLine = {
   category: string
   quantity: number
   unit: "m²" | "ชิ้น"
-  unitPrice: number
-  total: number
+  unitPrice: number | null
+  total: number | null
+  packageQuantity?: number
+  packageUnit?: "box" | "piece" | "set"
 }
 
 type Budget = {
@@ -137,7 +139,7 @@ export async function exportSketch2SpecPdf({
           .map(
             (line) => `
               <tr>
-                <td>${escapeHtml(line.name)}</td>
+                <td>${escapeHtml(line.name)}${line.packageQuantity !== undefined ? `<br><small>${line.packageQuantity} ${escapeHtml(line.packageUnit ?? "box")} (no waste factor)</small>` : ""}</td>
                 <td>${escapeHtml(targetLabel(line.target))}</td>
                 <td class="number">
                   ${formatNumber(
@@ -146,8 +148,8 @@ export async function exportSketch2SpecPdf({
                   )}
                 </td>
                 <td>${escapeHtml(line.unit)}</td>
-                <td class="money">${formatMoney(line.unitPrice)}</td>
-                <td class="money">${formatMoney(line.total)}</td>
+                <td class="money">${line.unitPrice === null ? "Price unavailable" : formatMoney(line.unitPrice)}</td>
+                <td class="money">${line.total === null ? "—" : formatMoney(line.total)}</td>
               </tr>
             `,
           )

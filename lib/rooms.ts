@@ -126,6 +126,19 @@ export function paintWallFace(wall: Detection, finish: WallFinish): Detection {
   return {...wall,wallFinishes:[...kept,{...finish}].sort((a,b)=>a.side.localeCompare(b.side)||a.start-b.start)}
 }
 export type PaintScope = "selected" | "face" | "room" | "all"
+/** A clicked face is limited to its room span, or to the exterior gap around the hit. */
+export function wallFaceIntervalAt(detections: Detection[], wall: Detection, side: WallSide, position: number) {
+  const contacts = detections
+    .filter(room => labelKind(room.label) === "floor")
+    .flatMap(room => roomWallFaces(room, wall))
+    .filter(face => face.side === side)
+    .sort((a, b) => a.start - b.start)
+  const roomFace = contacts.find(face => position >= face.start - 1e-6 && position <= face.end + 1e-6)
+  if (roomFace) return { side, start: roomFace.start, end: roomFace.end }
+  const start = contacts.filter(face => face.end < position).reduce((max, face) => Math.max(max, face.end), 0)
+  const end = contacts.filter(face => face.start > position).reduce((min, face) => Math.min(min, face.start), 1)
+  return { side, start, end }
+}
 export function applyScopedMaterial(detections: Detection[], target: string, materialId: string, scope: PaintScope, selectedId: string | null, roomId: string | null, side: WallSide, position?: number): Detection[] {
   const room = detections.find(d=>d.id===roomId && labelKind(d.label)==="floor")
   return detections.map(d => {
@@ -140,9 +153,8 @@ export function applyScopedMaterial(detections: Detection[], target: string, mat
     if (scope === "face") {
       if (target !== "wall") return d
       const contacts = detections.filter(r=>labelKind(r.label)==="floor").flatMap(r=>roomWallFaces(r,d)).filter(f=>f.side===side)
-      const face = position === undefined ? (contacts.length===1 ? contacts[0] : undefined) : contacts.find(f=>position>=f.start-1e-6 && position<=f.end+1e-6)
-      // A clicked room-facing span cannot spill into a neighbouring room.
-      if (contacts.length && !face) return d
+      if (position === undefined && contacts.length !== 1) return d
+      const face = position === undefined ? contacts[0] : wallFaceIntervalAt(detections, d, side, position)
       return paintWallFace(d,{...(face ?? {side,start:0,end:1}),materialId})
     }
     return {...d,materialId,materialApplied:true,...(target === "wall" ? {wallFinishes:[]} : {})}

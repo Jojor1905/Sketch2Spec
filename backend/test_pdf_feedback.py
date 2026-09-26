@@ -57,6 +57,7 @@ with sync_playwright() as p:
     expect(page.get_by_role('button',name='เปิดโปรเจกต์',exact=True)).to_be_enabled()
     page.get_by_label('เปิดไฟล์โปรเจกต์',exact=True).set_input_files({'name':'pdf-feedback.sketch2spec.json','mimeType':'application/json','buffer':json.dumps(project).encode()})
     page.get_by_role('button',name='3D Editor',exact=True).click()
+    page.get_by_text('เครื่องมือเพิ่มเติม · จัดแนว แบ่งห้อง เลือกชิ้นงานที่ถูกบัง',exact=True).click()
     canvas=page.locator('canvas'); expect(canvas).to_be_visible()
     page.wait_for_timeout(2500)
     expect(page.get_by_test_id('original-plan-preview')).to_be_visible()
@@ -70,7 +71,7 @@ with sync_playwright() as p:
     report('floor can be selected, deleted and restored')
     for identifier in ['test-door','test-window']:
         picker.select_option(identifier)
-        page.get_by_role('button',name='แก้ขนาด',exact=True).click()
+        expect(page.get_by_label('ความยาว (เมตร)',exact=True)).to_be_visible()
         page.get_by_label('ความยาว (เมตร)',exact=True).fill('1.2')
         page.get_by_label('ความยาว (เมตร)',exact=True).press('Enter')
         wait_saved(page,lambda d:any(x['id']==identifier and abs(x['box']['width']-60)<0.01 for x in d))
@@ -86,9 +87,26 @@ with sync_playwright() as p:
     rotation=page.get_by_label('หมุนลาย',exact=False)
     rotation.fill('90')
     wait_saved(page,lambda d:any(x['id']=='test-floor' and x.get('materialScale')==1.5 and abs(x.get('materialRotation',0)-1.570796)<0.001 for x in d))
-    page.get_by_role('button',name='ประตู',exact=True).click()
+    page.evaluate("""() => {
+      const open = window.open.bind(window)
+      window.open = (...args) => {
+        const report = open(...args)
+        if (report) report.print = () => { report.document.documentElement.dataset.printInvoked = 'true' }
+        return report
+      }
+    }""")
+    with page.expect_popup() as report_popup:
+        page.get_by_title('Export PDF',exact=True).click()
+    report_page=report_popup.value
+    report_page.wait_for_function("document.documentElement.dataset.printInvoked === 'true'")
+    assert 'Sketch2Spec - House Planning Report' in report_page.title()
+    assert report_page.locator('img[alt="3D Preview"]').count()==1
+    assert 'Sketch2Spec' in report_page.locator('body').inner_text()
+    report('calibrated project opens the report with a 3D image and invokes browser print')
+    report_page.close()
+    page.get_by_role('button',name='Door',exact=True).click()
     page.screenshot(path=str(OUT/'pdf-materials-doors.png'),full_page=True)
-    page.get_by_role('button',name='หน้าต่าง',exact=True).click()
+    page.get_by_role('button',name='Window',exact=True).click()
     page.get_by_title('เลือกวัสดุและดูงบประมาณ',exact=True).click()
     report('per-surface materials and texture controls persist; separate opening categories accessible')
     page.get_by_role('button',name='แบบแปลน',exact=True).click()
@@ -102,7 +120,10 @@ with sync_playwright() as p:
     page.get_by_title('Undo',exact=True).click()
     wait_saved(page,lambda d:any(x['id']=='test-wall' for x in d))
     report('actual canvas wall selection and deletion work')
-    page.get_by_role('button',name='พื้น',exact=True).click()
+    page.get_by_role('button',name='More tools',exact=True).click()
+    page.get_by_role('button',name='Draw floor',exact=True).click()
+    page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+    b=canvas.bounding_box(); cx=b['x']+b['width']/2; cy=b['y']+b['height']/2
     page.mouse.move(cx-170,cy-140); page.mouse.down(); page.mouse.move(cx-60,cy-70,steps=8); page.mouse.up()
     wait_saved(page,lambda d:len(d)==5)
     expect(page.get_by_role('button',name='เลือก',exact=True)).to_have_attribute('aria-pressed','true')
@@ -110,12 +131,12 @@ with sync_playwright() as p:
     wait_saved(page,lambda d:len(d)==4)
     report('new floor automatically enters selection and deletes immediately')
     expect(page.get_by_role('button',name='ฝ้า',exact=True)).to_have_count(0)
-    page.get_by_role('button',name='หมุนดู 360°',exact=True).click()
+    page.get_by_role('button',name='Orbit',exact=True).click()
     page.wait_for_timeout(1200)
     b=canvas.bounding_box(); cx=b['x']+b['width']/2; cy=b['y']+b['height']/2
     page.mouse.click(cx-35,cy-35)
     expect(picker).to_have_value('test-wall')
-    expect(page.get_by_role('button',name='หมุนดู 360°',exact=True)).to_have_attribute('aria-pressed','true')
+    expect(page.get_by_role('button',name='Orbit',exact=True)).to_have_attribute('aria-pressed','true')
     report('single click selects a wall while staying in orbit mode')
     picker.select_option('')
     # Drag a visible floor, then an empty canvas area: both navigate without changing geometry.
@@ -126,7 +147,7 @@ with sync_playwright() as p:
     assert canvas.screenshot()!=before
     assert saved(page)==data
     report('left drag on the floor navigates without moving floor geometry')
-    page.get_by_role('button',name='คืนมุมกล้อง',exact=True).click()
+    page.get_by_role('button',name='กลับมุมมองหลัก',exact=True).click()
     page.wait_for_timeout(600)
     before=canvas.screenshot(); data=saved(page)
     page.locator('body').click(position={'x':10,'y':10})
