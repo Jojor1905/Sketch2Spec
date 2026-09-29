@@ -3012,7 +3012,9 @@ function InteractiveObject({
         </mesh>
       )}
 
-      {selected && buildTool === "select" && editAction === "resize" && !isRectObject && (
+      {/* Wall, door, and window endpoints stay available after selection. This
+          restores direct resize without making users switch away from Select. */}
+      {selected && buildTool === "select" && !isRectObject && (
         <>
           {[
             { position: handleStart, operation: "resize-start" as const },
@@ -4771,11 +4773,13 @@ export function EditableFloorPlan3D(props: Props) {
             ? "ลากซ้าย = หมุน · ลากขวา = เลื่อน · ล้อเมาส์ = ซูม"
             : editAction === "move"
               ? "โหมดย้าย: ลากวัตถุได้อย่างเดียว"
-              : editAction === "resize"
+                : editAction === "resize"
                 ? "โหมดปรับขนาด: ลากจุดจับได้อย่างเดียว"
                 : editAction === "material"
                   ? "โหมดวัสดุ: เลือกชิ้นงาน แล้วกำหนดวัสดุ"
-                  : "โหมดเลือก: คลิกเพื่อเลือก ยังไม่ขยับวัตถุ"}
+                  : selected && !["floor", "ceiling", "furniture"].includes(labelKind(selected.label))
+                    ? "โหมดเลือก: ลากจุดจับสีน้ำเงินที่ปลายเพื่อยืด/หดได้ทันที · ลากพื้นที่ว่างเพื่อหมุน"
+                    : "โหมดเลือก: คลิกเพื่อเลือก · ลากพื้นที่ว่างเพื่อหมุน"}
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2 border-t bg-white px-4 py-2">
