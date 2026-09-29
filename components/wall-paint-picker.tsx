@@ -59,7 +59,8 @@ export function WallPaintPicker({ rooms, detections, room, scope, selectedId, si
     </>}
     {scope==="all" && <p className="text-xs text-amber-700">ทาทุกผนังทั้งสองฝั่ง รวมด้านนอกบ้าน</p>}
     {scope==="selected" && <p className="text-xs">ทาผนังชิ้นที่เลือกทั้งสองฝั่ง</p>}
-    {scope==="face" && surfaces.length>0 && !surfaces.some(active) && <p role="status" className="text-xs text-amber-700">เลือกหมายเลขผนังด้านในห้องนี้ก่อนทาสี</p>}
+    {scope==="face" && position===undefined && !surfaces.some(active) && <p role="status" className="text-xs text-amber-700">เลือกหมายเลขผนัง หรือคลิกฝั่งผนังด้านนอกบนโมเดลเพื่อทาสี</p>}
+    {scope==="face" && <p className="text-xs">ทาผนังด้านนอก: หมุนโมเดลแล้วคลิกฝั่งผนังที่ต้องการ สีจะเปลี่ยนเฉพาะฝั่งนั้น</p>}
     <p className="text-[11px] text-purple-700">สีม่วงในโมเดลแสดงบริเวณที่จะทา</p>
     <details className="text-xs"><summary className="cursor-pointer text-muted-foreground">ตัวเลือกเพิ่มเติม</summary>
       <button type="button" disabled={!selectedId || !detections.some(d=>d.id===selectedId && d.label.toLowerCase().includes("wall"))} onClick={()=>onScope("selected")} className="mt-2 rounded-lg border bg-white p-2 disabled:opacity-40">ทาผนังชิ้นที่เลือกทั้งสองฝั่ง</button>

@@ -46,7 +46,7 @@ import { DoubleSide, MOUSE, TOUCH, Plane, PlaneGeometry, RepeatWrapping, SRGBCol
 
 import { inferRoomFloors, rebuildRoomFloors, removeDuplicateWalls } from "@/lib/floor-plan-repair"
 import { WallPaintPicker, type RoomSurface } from "@/components/wall-paint-picker"
-import { paintWallFace, applyScopedMaterial, floorBoxes, overlapArea, roomWallFaces, type PaintScope } from "@/lib/rooms"
+import { snapFloorPoint, paintWallFace, applyScopedMaterial, floorBoxes, overlapArea, roomWallFaces, type PaintScope } from "@/lib/rooms"
 import { Button } from "@/components/ui/button"
 import {
   calculateBudget,
@@ -1607,9 +1607,12 @@ function surfaceFromPoints(
   materialId?: string,
   kind: "floor" | "ceiling" | "furniture" = "floor",
 ) {
-  const otherObjects = detections.filter((item) => labelKind(item.label) !== kind)
-  const start = snapPointForMode(startValue, otherObjects, imageSize, snapMode, gridStepPx)
-  const end = snapPointForMode(endValue, otherObjects, imageSize, snapMode, gridStepPx)
+  const otherObjects = kind === "floor" ? detections : detections.filter((item) => labelKind(item.label) !== kind)
+  const snap = (point: {x:number; y:number}) => kind === "floor" && snapMode === "smart"
+    ? snapFloorPoint(point, otherObjects, imageSize)
+    : snapPointForMode(point, otherObjects, imageSize, snapMode, gridStepPx)
+  const start = snap(startValue)
+  const end = snap(endValue)
   const box = clampBox(boxFromEdges(start.x, start.y, end.x, end.y), imageSize, 1)
   return makeDetection(kind, box, DEFAULT_WALL_HEIGHT, materialId)
 }
@@ -3773,7 +3776,7 @@ export function EditableFloorPlan3D(props: Props) {
   useEffect(() => { setRoomNameDraft(paintRoom?.roomName ?? "") }, [paintRoom?.id, paintRoom?.roomName])
   const roomFaceCount = paintRoom ? props.detections.reduce((n,d) => n + roomWallFaces(paintRoom,d).length,0) : 0
   const scopeLabels: Record<PaintScope,string> = {selected:"ใช้กับที่เลือก",face:"ใช้กับผนังฝั่งนี้",room:"ใช้กับห้องนี้",all:"ใช้กับทั้งหมด"}
-  const validRoomSurface = !rooms.length || Boolean(paintRoom && selected && wallHit && wallHit.id===selected.id && roomWallFaces(paintRoom,selected).some(f=>f.side===selectedWallSide && wallHit.position>=f.start && wallHit.position<=f.end))
+  const validRoomSurface = Boolean(selectedMaterialTarget === "wall" && selected && wallHit && wallHit.id === selected.id)
   const paintPreview = materialsOpen && selectedMaterialDefinitionTarget() === "wall" && (paintScope!=="face" || validRoomSurface)
     ? applyScopedMaterial(props.detections.map(d=>({...d,wallFinishes:[]})), "wall", selectedMaterialId, paintScope, selected?.id ?? null, paintRoom?.id ?? null, selectedWallSide, wallHit?.id===selected?.id ? wallHit?.position : undefined)
     : []
@@ -4060,7 +4063,7 @@ export function EditableFloorPlan3D(props: Props) {
     if (scope === "room" && (!paintRoom || !["wall","floor"].includes(material.target))) { showNotice("เลือกห้องและวัสดุพื้นหรือผนังก่อน"); return }
     if ((scope === "selected" || scope === "face") && (!selected || selectedMaterialTarget !== material.target)) { showNotice(`เลือก${targetLabel(material.target)}ก่อนใช้วัสดุ`); return }
     if (scope === "face" && material.target !== "wall") return
-    if (scope === "face" && !validRoomSurface) { showNotice("เลือกหมายเลขผนังในห้องก่อนทาสี"); return }
+    if (scope === "face" && !validRoomSurface) { showNotice("เลือกฝั่งผนังบนโมเดล หรือหมายเลขผนังในห้องก่อนทาสี"); return }
     if (scope === "room" && material.target === "wall" && !props.detections.some(d => roomWallFaces(paintRoom!,d).length)) { showNotice("ไม่พบผนังที่ติดกับห้องนี้ กรุณาแบ่งพื้นตามห้องใหม่หลังแก้ผนัง"); return }
     const next = applyScopedMaterial(props.detections, material.target, material.id, scope, selected?.id ?? null, paintRoom?.id ?? null, selectedWallSide, wallHit?.id === selected?.id ? wallHit?.position : undefined)
     if (!next.some((d,i)=>JSON.stringify(d)!==JSON.stringify(props.detections[i]))) {
@@ -4335,7 +4338,7 @@ export function EditableFloorPlan3D(props: Props) {
     : `${gridStepPx} px`
 
   return (
-    <div className="animate-in fade-in overflow-hidden rounded-2xl border border-border bg-slate-200 duration-500">
+    <div className="overflow-hidden rounded-2xl border border-border bg-slate-200">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-white/95 px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -4473,7 +4476,7 @@ export function EditableFloorPlan3D(props: Props) {
       </div>
       <div
         ref={canvasHostRef}
-        className={`relative h-[720px] w-full touch-none select-none overflow-hidden overscroll-contain ${buildTool === "orbit" ? "cursor-grab active:cursor-grabbing" : ""}`}
+        className={`relative h-[clamp(360px,65dvh,720px)] w-full touch-none select-none overflow-hidden overscroll-contain ${buildTool === "orbit" ? "cursor-grab active:cursor-grabbing" : ""}`}
       >
         <div className="pointer-events-none absolute left-3 top-3 z-20 flex max-w-[140px] sm:max-w-[360px] items-center gap-2 rounded-full border border-white/80 bg-white/92 px-3 py-2 shadow-lg backdrop-blur-md">
           <span className="rounded-full bg-primary/10 p-1.5 text-primary">
@@ -4644,7 +4647,7 @@ export function EditableFloorPlan3D(props: Props) {
         )}
 
         {materialsOpen && (
-          <div className="absolute right-3 top-3 z-50 max-h-[690px] w-[340px] max-w-[calc(100%-24px)] overflow-y-auto rounded-2xl border border-white/80 bg-white/95 p-4 shadow-2xl backdrop-blur-xl">
+          <div className="absolute right-3 top-3 z-50 max-h-[calc(100%-24px)] w-[340px] max-w-[calc(100%-24px)] overflow-y-auto rounded-2xl border border-white/80 bg-white/95 p-4 shadow-2xl backdrop-blur-xl">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
@@ -4866,7 +4869,7 @@ export function EditableFloorPlan3D(props: Props) {
             </>}
 
             {selectedMaterialDefinition.target === "wall" && <div className="sticky bottom-0 z-10 mt-3 rounded-xl border bg-white p-3 shadow-lg">
-              <p className="mb-2 text-xs" aria-live="polite">{selectedMaterialDefinition.name} → {paintScope==="all"?"ทุกผนังในแปลน":paintScope==="room"?`ผนังด้านใน ${paintRoom?.roomName ?? "ห้องที่เลือก"}`:paintScope==="selected"?"ผนังชิ้นที่เลือกทั้งสองฝั่ง":`ผนังที่เลือกของ ${paintRoom?.roomName ?? "ห้อง"}`}</p>
+              <p className="mb-2 text-xs" aria-live="polite">{selectedMaterialDefinition.name} → {paintScope==="all"?"ทุกผนังในแปลน":paintScope==="room"?`ผนังด้านใน ${paintRoom?.roomName ?? "ห้องที่เลือก"}`:paintScope==="selected"?"ผนังชิ้นที่เลือกทั้งสองฝั่ง":"ผนังฝั่งที่เลือกบนโมเดล"}</p>
               <Button type="button" className="w-full" disabled={!paintEnabled || (paintScope==="face" && !highlightedFaces[selected?.id ?? ""]?.length)} onClick={()=>applyMaterial(paintScope)}>3. ทาสีผนัง</Button>
               {!paintEnabled && <p className="mt-1 text-xs text-amber-700">เลือกห้องหรือผนังด้านบนก่อน</p>}
             </div>}
@@ -5271,7 +5274,7 @@ export function EditableFloorPlan3D(props: Props) {
         )}
 
         {buildTool !== "orbit" && (
-        <div className="absolute bottom-3 left-1/2 z-30 w-[calc(100%-24px)] max-w-[900px] -translate-x-1/2 rounded-2xl border border-white/80 bg-white/95 p-1.5 shadow-2xl backdrop-blur-xl">
+        <div className="fixed bottom-[max(12px,env(safe-area-inset-bottom))] left-1/2 z-[70] w-[calc(100%-24px)] max-w-[900px] -translate-x-1/2 rounded-2xl border border-white/80 bg-white/95 p-1.5 shadow-2xl backdrop-blur-xl" aria-label="เครื่องมือแก้ไข 3D">
           <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-8">
             {([
               { key: "orbit" as const, label: "หมุนดู", shortcut: "", icon: RotateCw },

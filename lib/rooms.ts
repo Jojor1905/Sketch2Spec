@@ -1,10 +1,27 @@
-import { boxFromEdges, labelKind, type Detection, type DetectionBox, type WallFinish, type WallSide } from "./floor-plan"
+import { boxFromEdges, labelKind, type Detection, type DetectionBox, type WallFinish, type WallSide, type ImageSize } from "./floor-plan"
 
 export function floorBoxes(floor: Detection): DetectionBox[] {
   if (!floor.floorTiles?.length) return [floor.box]
   const b = floor.box
   return floor.floorTiles.map(t => boxFromEdges(b.x1+t.x1*b.width,b.y1+t.y1*b.height,b.x1+t.x2*b.width,b.y1+t.y2*b.height))
 }
+/** Snap new floor corners to actual surface edges, including concave floor tiles. */
+export function snapFloorPoint(point: {x:number; y:number}, detections: Detection[], image: ImageSize) {
+  const threshold = Math.max(5, Math.min(16, Math.max(image.width,image.height)*0.012))
+  const boxes = detections.filter(d => ["wall","floor"].includes(labelKind(d.label))).flatMap(d => labelKind(d.label)==="floor" ? floorBoxes(d) : [d.box])
+  const snap = (value:number, edges:number[], max:number) => {
+    let result = value, distance = threshold + 1e-9
+    for (const edge of edges) if (Math.abs(edge-value) < distance) {
+      result = edge
+      distance = Math.abs(edge-value)
+    }
+    return Math.max(0,Math.min(max,result))
+  }
+  const xEdges = boxes.filter(b => point.y >= b.y1 - threshold && point.y <= b.y2 + threshold).flatMap(b => [b.x1,b.x2])
+  const yEdges = boxes.filter(b => point.x >= b.x1 - threshold && point.x <= b.x2 + threshold).flatMap(b => [b.y1,b.y2])
+  return {x:snap(point.x,xEdges,image.width), y:snap(point.y,yEdges,image.height)}
+}
+
 export function floorAreaPx(floor: Detection) { return floorBoxes(floor).reduce((sum,b) => sum+b.width*b.height,0) }
 export function overlapArea(a: DetectionBox[], b: DetectionBox[]) {
   let total = 0
@@ -70,9 +87,26 @@ export function applyScopedMaterial(detections: Detection[], target: string, mat
       if (target !== "wall") return d
       const contacts = detections.filter(r=>labelKind(r.label)==="floor").flatMap(r=>roomWallFaces(r,d)).filter(f=>f.side===side)
       const face = position === undefined ? (contacts.length===1 ? contacts[0] : undefined) : contacts.find(f=>position>=f.start-1e-6 && position<=f.end+1e-6)
-      // A clicked room-facing span cannot spill into a neighbouring room.
-      if (contacts.length && !face) return d
-      return paintWallFace(d,{...(face ?? {side,start:0,end:1}),materialId})
+      // Exterior portions of a partly room-facing wall stop at room boundaries.
+      if (contacts.length && !face && position === undefined) return d
+      const b = d.box, horizontal = b.width >= b.height
+      const edge = horizontal ? (side === "negative" ? b.y1 : b.y2) : (side === "negative" ? b.x1 : b.x2)
+      const origin = horizontal ? b.x1 : b.y1, length = horizontal ? b.width : b.height
+      const blocked = detections.filter(w => w.id !== d.id && labelKind(w.label) === "wall").flatMap(w => {
+        const a=w.box
+        const touches = horizontal ? a.y1 <= edge && a.y2 >= edge : a.x1 <= edge && a.x2 >= edge
+        const start=Math.max(0,((horizontal?a.x1:a.y1)-origin)/length), end=Math.min(1,((horizontal?a.x2:a.y2)-origin)/length)
+        return touches && end>start ? [{start,end}] : []
+      })
+      if (!face && position !== undefined && blocked.some(f=>position>=f.start && position<=f.end)) return d
+      const exposed = {side, start:0, end:1}
+      if (!face && position !== undefined) {
+        for (const contact of [...contacts,...blocked]) {
+          if (contact.end <= position) exposed.start = Math.max(exposed.start,contact.end)
+          if (contact.start >= position) exposed.end = Math.min(exposed.end,contact.start)
+        }
+      }
+      return paintWallFace(d,{...(face ?? exposed),materialId})
     }
     return {...d,materialId,materialApplied:true,...(target === "wall" ? {wallFinishes:[]} : {})}
   })
