@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import fitz
+from auth_test_helpers import login_page
 from playwright.sync_api import sync_playwright, expect
 
 BASE = Path(__file__).resolve().parent
@@ -54,6 +55,7 @@ with TemporaryDirectory(prefix='sketch2spec-test-') as temp, sync_playwright() a
     page=context.new_page()
     errors=[]
     page.on('pageerror',lambda e: errors.append(str(e)))
+    login_page(page)
     page.goto('http://localhost:3000/upload')
     upload=page.get_by_label('อัปโหลดแปลน', exact=True)
     expect(upload).to_be_enabled()
@@ -180,6 +182,7 @@ with TemporaryDirectory(prefix='sketch2spec-test-') as temp, sync_playwright() a
     mobile=browser.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True)
     mp=mobile.new_page()
     mp.on('pageerror',lambda e:errors.append(str(e)))
+    login_page(mp)
     mp.goto('http://localhost:3000/upload')
     expect(mp.get_by_role('button',name='เปิดโปรเจกต์',exact=True)).to_be_enabled()
     mp.get_by_label('เปิดไฟล์โปรเจกต์',exact=True).set_input_files(str(backup))
@@ -200,6 +203,7 @@ with TemporaryDirectory(prefix='sketch2spec-test-') as temp, sync_playwright() a
     pdfcontext=browser.new_context()
     pp=pdfcontext.new_page()
     pp.on('pageerror',lambda e:errors.append(str(e)))
+    login_page(pp)
     pp.goto('http://localhost:3000/upload')
     expect(pp.get_by_label('อัปโหลดแปลน',exact=True)).to_be_enabled()
     pp.get_by_label('อัปโหลดแปลน',exact=True).set_input_files(str(pdf))
@@ -217,6 +221,7 @@ with TemporaryDirectory(prefix='sketch2spec-test-') as temp, sync_playwright() a
     up=unavailable.new_page()
     up.on('pageerror',lambda e: errors.append(str(e)))
     up.route('**/health',lambda r:r.abort('connectionrefused'))
+    login_page(up)
     up.goto('http://localhost:3000/upload')
     expect(up.get_by_text('ยังเชื่อมต่อ AI ไม่ได้',exact=True)).to_be_visible()
     expect(up.locator('main [role=alert]')).to_contain_text('กู้คืนงานล่าสุดไม่สำเร็จ')

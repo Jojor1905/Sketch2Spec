@@ -8,6 +8,7 @@ from io import BytesIO
 from PIL import Image
 import time
 from pathlib import Path
+from auth_test_helpers import login_page
 from playwright.sync_api import sync_playwright, expect
 
 OUT = Path(__file__).parent / 'test_results'
@@ -53,6 +54,7 @@ with sync_playwright() as p:
     page=browser.new_page(viewport={'width':1500,'height':1150})
     errors=[]
     page.on('pageerror',lambda e:errors.append(str(e)))
+    login_page(page)
     page.goto('http://localhost:3000/upload')
     expect(page.get_by_role('button',name='เปิดโปรเจกต์',exact=True)).to_be_enabled()
     page.get_by_label('เปิดไฟล์โปรเจกต์',exact=True).set_input_files({'name':'pdf-feedback.sketch2spec.json','mimeType':'application/json','buffer':json.dumps(project).encode()})

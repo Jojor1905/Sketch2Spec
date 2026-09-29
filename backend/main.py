@@ -13,7 +13,11 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 import fitz
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Depends, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
+from auth import Auth, Settings, require_user, router as auth_router
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -29,14 +33,45 @@ MAX_IMAGE_DIMENSION = 2000
 SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 JOB_TTL_SECONDS = 30 * 60
 
-app = FastAPI(title="Sketch2Spec AI Detection API", version="3.1")
+auth_settings = Settings.load()
+app = FastAPI(title="Sketch2Spec AI Detection API", version="3.1",
+              docs_url=None if auth_settings.environment == "production" else "/docs",
+              redoc_url=None, openapi_url=None if auth_settings.environment == "production" else "/openapi.json")
+app.state.auth = Auth(auth_settings)
+app.include_router(auth_router)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, exc: RequestValidationError):
+    # Pydantic errors may contain submitted passwords in their input/context.
+    return JSONResponse(status_code=422, content={"detail": [
+        {"loc": list(error["loc"]), "msg": error["msg"], "type": error["type"]}
+        for error in exc.errors()
+    ]})
+
+
+@app.middleware("http")
+async def private_responses(request: Request, call_next):
+    # Reject before multipart parsing, file buffering, or inference starts.
+    path = request.url.path.rstrip("/")
+    if path in {"/pdf/info", "/prepare", "/detect", "/detect/jobs"} or path.startswith("/detect/jobs/"):
+        if request.method != "OPTIONS":
+            try:
+                await run_in_threadpool(require_user, request)
+            except HTTPException as exc:
+                return JSONResponse({"detail": exc.detail}, status_code=exc.status_code,
+                                    headers={"Cache-Control": "no-store"})
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origins=auth_settings.origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type"],
 )
 
 _model: Any | None = None
@@ -87,7 +122,6 @@ def health_check() -> dict[str, Any]:
     return {
         "status": "ok" if YOLO is not None and MODEL_PATH.exists() else "degraded",
         "message": "Sketch2Spec detection backend is running",
-        "model": MODEL_PATH.name,
         "model_ready": bool(YOLO is not None and MODEL_PATH.exists()),
         "supports": ["jpg", "jpeg", "png", "webp", "pdf-multi-page"],
         "max_upload_mb": MAX_UPLOAD_BYTES // 1024 // 1024,
@@ -95,7 +129,7 @@ def health_check() -> dict[str, Any]:
     }
 
 
-@app.post("/pdf/info")
+@app.post("/pdf/info", dependencies=[Depends(require_user)])
 async def pdf_info(file: UploadFile = File(...)) -> dict[str, int]:
     data = await read_upload(file)
     if not is_pdf_upload(data, file.filename, file.content_type):
@@ -111,7 +145,7 @@ async def pdf_info(file: UploadFile = File(...)) -> dict[str, int]:
         raise HTTPException(status_code=400, detail="The PDF could not be read.") from error
 
 
-@app.post("/prepare")
+@app.post("/prepare", dependencies=[Depends(require_user)])
 async def prepare_floor_plan(
     file: UploadFile = File(...),
     page: int = Query(default=1, ge=1),
@@ -138,6 +172,7 @@ async def prepare_floor_plan(
 
 @app.post("/detect/jobs", status_code=202)
 async def create_detection_job(
+    user: dict = Depends(require_user),
     file: UploadFile = File(...),
     confidence: float = Query(default=0.25, ge=0.01, le=0.99),
 ) -> dict[str, str]:
@@ -149,6 +184,7 @@ async def create_detection_job(
     with _job_lock:
         _jobs[job_id] = {
             "id": job_id,
+            "owner": user["username"],
             "status": "queued",
             "phase": "preparing",
             "progress": 5,
@@ -171,11 +207,11 @@ async def create_detection_job(
 
 
 @app.get("/detect/jobs/{job_id}")
-def get_detection_job(job_id: str) -> dict[str, Any]:
+def get_detection_job(job_id: str, user: dict = Depends(require_user)) -> dict[str, Any]:
     _cleanup_jobs()
     with _job_lock:
         job = _jobs.get(job_id)
-        if job is None:
+        if job is None or job.get("owner") != user["username"]:
             raise HTTPException(status_code=404, detail="Detection job was not found.")
         return {
             "id": job["id"],
@@ -189,13 +225,16 @@ def get_detection_job(job_id: str) -> dict[str, Any]:
 
 
 @app.delete("/detect/jobs/{job_id}")
-def delete_detection_job(job_id: str) -> dict[str, bool]:
+def delete_detection_job(job_id: str, user: dict = Depends(require_user)) -> dict[str, bool]:
     with _job_lock:
+        job = _jobs.get(job_id)
+        if job is None or job.get("owner") != user["username"]:
+            raise HTTPException(404, "Detection job was not found.")
         removed = _jobs.pop(job_id, None) is not None
     return {"deleted": removed}
 
 
-@app.post("/detect")
+@app.post("/detect", dependencies=[Depends(require_user)])
 async def detect_floor_plan(
     file: UploadFile = File(...),
     confidence: float = Query(default=0.25, ge=0.01, le=0.99),

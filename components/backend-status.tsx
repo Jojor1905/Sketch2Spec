@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { RefreshCw } from "lucide-react"
 
-const API_URL = process.env.NEXT_PUBLIC_DETECTION_API_URL ?? "http://localhost:8000"
+const API_URL = "/api"
 
 export function BackendStatus() {
   const [status, setStatus] = useState<"checking" | "ready" | "offline" | "degraded">("checking")

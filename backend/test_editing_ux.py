@@ -7,6 +7,7 @@ import time
 from io import BytesIO
 from pathlib import Path
 from PIL import Image, ImageChops, ImageStat, ImageFilter
+from auth_test_helpers import login_page
 from playwright.sync_api import sync_playwright, expect
 OUT=Path(__file__).parent/'test_results'
 OUT.mkdir(exist_ok=True)
@@ -29,6 +30,7 @@ with sync_playwright() as p:
     page=browser.new_page(viewport={'width':1600,'height':1200})
     errors=[]
     page.on('pageerror',lambda e:errors.append(str(e)))
+    login_page(page)
     page.goto('http://localhost:3000/upload')
     upload=page.get_by_label('อัปโหลดแปลน',exact=True)
     expect(upload).to_be_enabled()

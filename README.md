@@ -4,6 +4,7 @@
 
 ## เอกสารสำหรับใช้งานและส่งต่องาน
 
+- [Login setup, environment variables, security, and authentication tests](docs/AUTHENTICATION.md) — configure both servers before opening `/login`; local demo: `admin1234` / `admin1234`.
 - [คู่มือแอป: ฟีเจอร์ วิธีใช้ วิธีรัน โครงสร้างโค้ด ข้อจำกัด และการทดสอบ](docs/APP_OVERVIEW.md)
 - [รายละเอียดห้อง พื้น และวัสดุรายผิว](docs/rooms-and-materials.md)
 
@@ -29,6 +30,8 @@
 brew install python@3.11
 python3.11 -m venv backend/.venv
 backend/.venv/bin/python -m pip install -r backend/requirements.txt
+[ -f backend/.env ] || cp backend/.env.example backend/.env
+[ -f .env.local ] || cp .env.example .env.local
 npm ci
 ```
 
@@ -36,7 +39,7 @@ npm ci
 
 ```bash
 cd ~/Downloads/Sketch2Spec-main
-backend/.venv/bin/python -m uvicorn main:app --app-dir backend --host 127.0.0.1 --port 8000
+backend/.venv/bin/python -m uvicorn main:app --app-dir backend --env-file backend/.env --host 127.0.0.1 --port 8001
 ```
 
 ```bash
@@ -44,7 +47,7 @@ cd ~/Downloads/Sketch2Spec-main
 npm run dev -- --hostname 127.0.0.1
 ```
 
-เปิด http://localhost:3000/upload และตรวจ backend ที่ http://localhost:8000/health
+เปิด http://localhost:3000/login และตรวจ backend ที่ http://localhost:8001/health
 เปิดทั้งสองแท็บค้างไว้ระหว่างใช้งาน กด Control+C เพื่อหยุด
 ใช้โมเดลเดิมที่ `backend/best.pt` โดยไม่ต้องฝึกหรือดาวน์โหลดโมเดลใหม่
 
@@ -63,14 +66,26 @@ backend/.venv/bin/python backend/test_api_smoke.py
 python -m venv .\backend\.venv
 .\backend\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\backend\.venv\Scripts\python.exe -m pip install -r .\backend\requirements.txt
-.\backend\.venv\Scripts\python.exe -m uvicorn main:app --reload --app-dir .\backend
+```
+
+สร้างไฟล์ Environment ครั้งแรก หากยังไม่มี:
+
+```powershell
+if (!(Test-Path .\backend\.env)) { Copy-Item .\backend\.env.example .\backend\.env }
+if (!(Test-Path .\.env.local)) { Copy-Item .\.env.example .\.env.local }
+```
+
+รัน Backend:
+
+```powershell
+.\backend\.venv\Scripts\python.exe -m uvicorn main:app --reload --app-dir .\backend --env-file .\backend\.env --host 127.0.0.1 --port 8001
 ```
 
 ตรวจสอบ Backend:
 
 ```text
-http://localhost:8000/health
-http://localhost:8000/docs
+http://127.0.0.1:8001/health
+http://127.0.0.1:8001/docs
 ```
 
 ไฟล์โมเดลต้องอยู่ที่:
@@ -81,9 +96,13 @@ backend/best.pt
 
 ## รัน Backend ครั้งถัดไป
 
+เปิด Terminal ที่โฟลเดอร์หลักของโปรเจกต์ แล้วรัน:
+
 ```powershell
-.\backend\.venv\Scripts\python.exe -m uvicorn main:app --reload --app-dir .\backend
+.\backend\.venv\Scripts\python.exe -m uvicorn main:app --reload --app-dir .\backend --env-file .\backend\.env --host 127.0.0.1 --port 8001
 ```
+
+> ระบบ Login/Auth ต้องอ่านค่าจาก `backend/.env` ดังนั้นต้องมี `--env-file .\backend\.env` ทุกครั้งที่รัน Backend
 
 ## รัน Frontend ครั้งแรก
 
@@ -101,11 +120,20 @@ corepack pnpm@latest-10 install
 corepack pnpm@latest-10 run dev
 ```
 
-เปิดเว็บ:
+เปิดหน้า Login:
 
 ```text
-http://localhost:3000/upload
+http://localhost:3000/login
 ```
+
+### รหัสเข้าสู่ระบบ Demo
+
+```text
+Username: admin1234
+Password: admin1234
+```
+
+หลัง Login สำเร็จ ระบบจะเข้าใช้งานหน้า Upload/Editor ได้
 
 ## รัน Frontend ครั้งถัดไป
 
@@ -123,11 +151,14 @@ corepack pnpm@latest-10 run dev
 
 ## ตั้งค่า URL ของ Backend
 
-ค่าเริ่มต้นคือ `http://localhost:8000` กรณีใช้พอร์ตอื่น ให้สร้าง `.env.local` ที่โฟลเดอร์หลัก:
+ไฟล์ `.env.local` ที่โฟลเดอร์หลักควรมี:
 
 ```env
-NEXT_PUBLIC_DETECTION_API_URL=http://localhost:8000
+NEXT_PUBLIC_DETECTION_API_URL=http://localhost:8001
+DETECTION_API_URL=http://localhost:8001
 ```
+
+หากแก้ `.env.local` ขณะ Frontend กำลังทำงาน ให้หยุดด้วย `Ctrl+C` แล้วรัน `npm run dev` ใหม่
 
 ## ไฟล์ที่รองรับ
 
@@ -227,7 +258,8 @@ npm run check
 
 ```text
 Frontend: http://localhost:3000
-Backend:  http://localhost:8000
+Backend:  http://127.0.0.1:8001
+Login:    http://localhost:3000/login
 ```
 
 ต้องเปิด Backend และ Frontend แยกกันคนละ Terminal

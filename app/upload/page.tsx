@@ -32,6 +32,8 @@ import {
 } from "lucide-react"
 
 import { FloorPlan2DEditor } from "@/components/floor-plan-2d-editor"
+import { authenticatedFetch } from "@/lib/auth-client"
+import { AuthControl } from "@/components/auth/auth-control"
 import { BackendStatus } from "@/components/backend-status"
 import { downloadProject, parseProjectFile } from "@/lib/project-file"
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from "@/components/ui/alert-dialog"
@@ -110,8 +112,7 @@ type SavedSession = {
 
 type WorkspaceView = "2d" | "3d"
 
-const API_URL =
-  process.env.NEXT_PUBLIC_DETECTION_API_URL ?? "http://localhost:8000"
+const API_URL = "/api"
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024
 const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"]
@@ -573,7 +574,7 @@ export default function UploadPage() {
       const formData = new FormData()
       formData.append("file", pdfFile)
 
-      const response = await fetch(`${API_URL}/prepare?page=${selectedPage}`, {
+      const response = await authenticatedFetch(`${API_URL}/prepare?page=${selectedPage}`, {
         method: "POST",
         body: formData,
       })
@@ -602,7 +603,7 @@ export default function UploadPage() {
     } catch (browserError) {
       const formData = new FormData()
       formData.append("file", pdfFile)
-      const response = await fetch(`${API_URL}/pdf/info`, {
+      const response = await authenticatedFetch(`${API_URL}/pdf/info`, {
         method: "POST",
         body: formData,
       })
@@ -789,7 +790,7 @@ export default function UploadPage() {
       setBackendProgress(35)
       const legacyFormData = new FormData()
       legacyFormData.append("file", file)
-      const legacyResponse = await fetch(`${API_URL}/detect`, {
+      const legacyResponse = await authenticatedFetch(`${API_URL}/detect`, {
         method: "POST",
         body: legacyFormData,
         signal: controller.signal,
@@ -807,7 +808,7 @@ export default function UploadPage() {
       let result: DetectionResponse | null = null
       const formData = new FormData()
       formData.append("file", file)
-      const createResponse = await fetch(`${API_URL}/detect/jobs`, {
+      const createResponse = await authenticatedFetch(`${API_URL}/detect/jobs`, {
         method: "POST",
         body: formData,
         signal: controller.signal,
@@ -826,7 +827,7 @@ export default function UploadPage() {
         const created = (await createResponse.json()) as { job_id: string }
         while (!result) {
           await sleep(280, controller.signal)
-          const statusResponse = await fetch(`${API_URL}/detect/jobs/${created.job_id}`, {
+          const statusResponse = await authenticatedFetch(`${API_URL}/detect/jobs/${created.job_id}`, {
             signal: controller.signal,
             cache: "no-store",
           })
@@ -1096,6 +1097,7 @@ export default function UploadPage() {
             {file && <Button type="button" variant="outline" className="rounded-2xl" onClick={exportProject} disabled={isProcessing || isRestoring}><Download className="mr-2 h-4 w-4" />สำรองโปรเจกต์</Button>}
             <input ref={projectInputRef} type="file" accept=".json" className="hidden" aria-label="เปิดไฟล์โปรเจกต์" onChange={event => void importProject(event.target.files?.[0])} />
             <div className="space-y-1 px-2">
+              <AuthControl />
               <BackendStatus />
               {file && <p role="status" className="text-[11px] text-muted-foreground">{saveStatus === "saved" ? "บันทึกงานในเบราว์เซอร์นี้แล้ว" : saveStatus === "error" ? "บันทึกงานไม่สำเร็จ" : "กำลังบันทึกงาน…"}</p>}
             </div>

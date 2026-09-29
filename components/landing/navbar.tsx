@@ -5,6 +5,7 @@ import Link from "next/link"
 import { AnimatePresence, motion } from "framer-motion"
 import { Home, Layers3, Menu, Paintbrush, ScanSearch, Upload, X } from "lucide-react"
 
+import { AuthControl } from "@/components/auth/auth-control"
 import { Button } from "@/components/ui/button"
 
 const navLinks = [
@@ -40,6 +41,7 @@ export function Navbar() {
         </div>
 
         <div className="hidden items-center gap-3 md:flex">
+          <AuthControl />
           <Button asChild variant="ghost" size="sm" className="rounded-xl">
             <Link href="/#how-it-works">ดูขั้นตอน</Link>
           </Button>
@@ -68,6 +70,7 @@ export function Navbar() {
             className="overflow-hidden border-b border-border/50 bg-background/95 backdrop-blur-xl md:hidden"
           >
             <div className="flex flex-col gap-1 px-6 py-4">
+              <AuthControl />
               {navLinks.map((link) => (
                 <Link
                   key={link.href}
