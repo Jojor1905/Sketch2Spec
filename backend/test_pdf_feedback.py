@@ -71,9 +71,10 @@ with sync_playwright() as p:
     report('floor can be selected, deleted and restored')
     for identifier in ['test-door','test-window']:
         picker.select_option(identifier)
-        expect(page.get_by_label('ความยาว (เมตร)',exact=True)).to_be_visible()
-        page.get_by_label('ความยาว (เมตร)',exact=True).fill('1.2')
-        page.get_by_label('ความยาว (เมตร)',exact=True).press('Enter')
+        length = page.get_by_role('spinbutton', name='ความยาวชิ้นงาน', exact=True)
+        expect(length).to_be_visible()
+        length.fill('1.2')
+        length.press('Enter')
         wait_saved(page,lambda d:any(x['id']==identifier and abs(x['box']['width']-60)<0.01 for x in d))
         page.get_by_title('ปิดแผง',exact=True).click()
     report('door and window length edits are persisted')
@@ -147,7 +148,7 @@ with sync_playwright() as p:
     assert canvas.screenshot()!=before
     assert saved(page)==data
     report('left drag on the floor navigates without moving floor geometry')
-    page.get_by_role('button',name='กลับมุมมองหลัก',exact=True).click()
+    page.get_by_label('มุมมองกล้อง',exact=True).get_by_role('button',name='กลับมุมมองหลัก',exact=True).click()
     page.wait_for_timeout(600)
     before=canvas.screenshot(); data=saved(page)
     page.locator('body').click(position={'x':10,'y':10})

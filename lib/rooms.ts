@@ -126,6 +126,21 @@ export function paintWallFace(wall: Detection, finish: WallFinish): Detection {
   return {...wall,wallFinishes:[...kept,{...finish}].sort((a,b)=>a.side.localeCompare(b.side)||a.start-b.start)}
 }
 export type PaintScope = "selected" | "face" | "room" | "all"
+/** Unmatched portions of each side, using the same room boundaries as click painting. */
+export function exteriorWallFaces(rooms: Detection[], wall: Detection) {
+  if (labelKind(wall.label) !== "wall") return []
+  const contacts = rooms.flatMap(room => roomWallFaces(room, wall))
+  const result: {side: WallSide; start: number; end: number}[] = []
+  for (const side of ["negative", "positive"] as const) {
+    let start = 0
+    for (const face of contacts.filter(face => face.side === side).sort((a,b) => a.start-b.start)) {
+      if (face.start > start + 1e-6) result.push({side, start, end: face.start})
+      start = Math.max(start, face.end)
+    }
+    if (start < 1 - 1e-6) result.push({side, start, end: 1})
+  }
+  return result
+}
 /** A clicked face is limited to its room span, or to the exterior gap around the hit. */
 export function wallFaceIntervalAt(detections: Detection[], wall: Detection, side: WallSide, position: number) {
   const contacts = detections

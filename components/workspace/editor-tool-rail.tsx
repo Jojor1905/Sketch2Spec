@@ -1,6 +1,7 @@
 "use client"
 
-import { DoorOpen, Ellipsis, Footprints, Grid2X2, Layers3, MousePointer2, Paintbrush, PanelTop, RectangleHorizontal, RotateCw, Sofa, SquareDashed } from "lucide-react"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { DoorOpen, Ellipsis, Footprints, Grid2X2, MousePointer2, Paintbrush, PanelTop, RectangleHorizontal, RotateCw, Sofa, SquareDashed } from "lucide-react"
 
 type Tool = "orbit" | "walk" | "select" | "wall" | "room" | "floor" | "ceiling" | "furniture" | "door" | "window"
 
@@ -27,37 +28,19 @@ const primary = [
 const advanced = [
   { key: "room", label: "Draw room", icon: RectangleHorizontal },
   { key: "floor", label: "Draw floor", icon: Grid2X2 },
-  { key: "ceiling", label: "Add ceiling", icon: Layers3 },
   { key: "furniture", label: "Add furniture", icon: Sofa },
 ] as const
 
 export function EditorToolRail({ activeTool, materialsOpen, advancedOpen, onTool, onMaterials, onAdvanced, focusMode = false, mode = "3d" }: Props) {
   const walkOnly = focusMode && activeTool === "walk"
   const visiblePrimary = mode === "2d" ? primary.filter(item => ["select", "wall", "door", "window"].includes(item.key)) : primary
+  const toolButton = (key: Tool, label: string, Icon: typeof RotateCw) => <Tooltip key={key}><TooltipTrigger asChild><button type="button" aria-label={label} aria-pressed={activeTool === key} onClick={() => onTool(key)} className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border focus-visible:outline-2 focus-visible:outline-primary ${activeTool === key ? "border-primary bg-primary/10 text-primary" : "border-transparent text-slate-600 hover:bg-slate-100"}`}><Icon aria-hidden="true" className="h-5 w-5" /></button></TooltipTrigger><TooltipContent side="top" className="z-[120]">{label}</TooltipContent></Tooltip>
   return (
-    <nav aria-label={focusMode ? "Focus editor tools" : "3D editor tools"} className={`absolute left-3 z-[60] flex w-14 flex-col gap-1 rounded-2xl border border-white/80 bg-white/95 p-1.5 shadow-xl backdrop-blur-md ${focusMode ? "top-16" : "top-3"}`}>
-      {!walkOnly && visiblePrimary.map(({ key, label, icon: Icon }) => (
-        <button key={key} type="button" title={label} aria-label={label} aria-pressed={activeTool === key}
-          onClick={() => onTool(key)}
-          className={`flex h-11 w-11 items-center justify-center rounded-xl border transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${activeTool === key ? "border-primary bg-primary/10 text-primary" : "border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-100"}`}>
-          <Icon aria-hidden="true" className="h-5 w-5" />
-        </button>
-      ))}
-      {!walkOnly && <div className="my-1 border-t border-slate-200" />}
-      <button type="button" title="Materials" aria-label="Materials" aria-pressed={materialsOpen} onClick={onMaterials}
-        className={`flex h-11 w-11 items-center justify-center rounded-xl border transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${materialsOpen ? "border-primary bg-primary/10 text-primary" : "border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-100"}`}>
-        <Paintbrush aria-hidden="true" className="h-5 w-5" />
-      </button>
-      {!walkOnly && <button type="button" title={mode === "2d" ? "More details" : "More tools"} aria-label={mode === "2d" ? "More details" : "More tools"} aria-expanded={advancedOpen} onClick={onAdvanced}
-        className={`flex h-11 w-11 items-center justify-center rounded-xl border transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${advancedOpen ? "border-primary bg-primary/10 text-primary" : "border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-100"}`}>
-        <Ellipsis aria-hidden="true" className="h-5 w-5" />
-      </button>}
-      {mode === "3d" && !walkOnly && advancedOpen && advanced.map(({ key, label, icon: Icon }) => (
-        <button key={key} type="button" title={label} aria-label={label} aria-pressed={activeTool === key} onClick={() => onTool(key)}
-          className={`flex h-11 w-11 items-center justify-center rounded-xl border transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${activeTool === key ? "border-primary bg-primary/10 text-primary" : "border-transparent text-slate-600 hover:border-slate-200 hover:bg-slate-100"}`}>
-          <Icon aria-hidden="true" className="h-5 w-5" />
-        </button>
-      ))}
+    <nav aria-label={focusMode ? "Focus editor tools" : "3D editor tools"} className="absolute bottom-3 left-1/2 z-[60] flex w-max max-w-[calc(100%-24px)] -translate-x-1/2 flex-wrap justify-center gap-1 rounded-2xl border border-white/80 bg-white/95 p-1.5 shadow-xl backdrop-blur-md">
+      {!walkOnly && visiblePrimary.map(({key,label,icon}) => toolButton(key,label,icon))}
+      <Tooltip><TooltipTrigger asChild><button type="button" aria-label="Materials" aria-pressed={materialsOpen} onClick={onMaterials} className={`flex h-10 w-10 items-center justify-center rounded-xl border ${materialsOpen ? "border-primary bg-primary/10 text-primary" : "border-transparent hover:bg-slate-100"}`}><Paintbrush className="h-5 w-5" /></button></TooltipTrigger><TooltipContent side="top" className="z-[120]">วัสดุและสี</TooltipContent></Tooltip>
+      {!walkOnly && <Tooltip><TooltipTrigger asChild><button type="button" aria-label={mode === "2d" ? "More details" : "More tools"} aria-expanded={advancedOpen} onClick={onAdvanced} className="flex h-10 w-10 items-center justify-center rounded-xl border border-transparent hover:bg-slate-100"><Ellipsis className="h-5 w-5" /></button></TooltipTrigger><TooltipContent side="top" className="z-[120]">เครื่องมือเพิ่มเติม</TooltipContent></Tooltip>}
+      {mode === "3d" && !walkOnly && advancedOpen && <div className="absolute bottom-full mb-2 flex gap-1 rounded-2xl border bg-white p-1.5 shadow-lg">{advanced.map(({key,label,icon}) => toolButton(key,label,icon))}</div>}
     </nav>
   )
 }

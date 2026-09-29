@@ -362,6 +362,7 @@ export default function UploadPage() {
     return () => { document.body.style.overflow = previousOverflow }
   }, [focusMode])
 
+  const bounded3D = hasWorkspace && workspaceView === "3d" && !focusMode
   const showLeftPanel = !focusMode && (!hasWorkspace || leftPanelOpen)
   const showRightPanel = hasWorkspace && workspaceView === "2d" && rightPanelOpen
   const workspaceLayoutClass = focusMode
@@ -1057,7 +1058,7 @@ export default function UploadPage() {
   }
 
   return (
-    <main className="min-h-screen bg-background px-4 py-5 text-foreground sm:px-6 sm:py-8">
+    <main className={`${bounded3D ? "h-dvh overflow-hidden px-3 py-3" : "min-h-screen px-4 py-5 sm:px-6 sm:py-8"} bg-background text-foreground`}>
       <AlertDialog open={Boolean(pendingAction)} onOpenChange={open => { if (!open) setPendingAction(null) }}>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>แทนที่งานปัจจุบันหรือไม่?</AlertDialogTitle><AlertDialogDescription>การทำรายการนี้อาจแทนที่แปลนหรือผลแก้ไขเดิม กดสำรองโปรเจกต์ก่อน หากต้องการเก็บงานนี้ไว้</AlertDialogDescription></AlertDialogHeader>
@@ -1107,8 +1108,8 @@ export default function UploadPage() {
         />
       )}
 
-      <div className={focusMode ? "w-full" : "mx-auto max-w-[1900px]"}>
-        <div className={`mb-6 flex flex-wrap items-center justify-between gap-3 sm:mb-8 ${focusMode ? "hidden" : ""}`}>
+      <div className={focusMode ? "w-full" : `mx-auto max-w-[1900px] ${bounded3D ? "flex h-full min-h-0 flex-col" : ""}`}>
+        <div className={`${bounded3D ? "mb-2 shrink-0" : "mb-6 sm:mb-8"} flex flex-wrap items-center justify-between gap-3 ${focusMode ? "hidden" : ""}`}>
           <Button type="button" variant="ghost" className="rounded-2xl" onClick={() => { if (pendingSaveRef.current !== null) { window.clearTimeout(pendingSaveRef.current); flushSaveRef.current?.() } router.push("/") }}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             กลับหน้าแรก
@@ -1166,7 +1167,7 @@ export default function UploadPage() {
             <button type="button" className="ml-auto shrink-0 text-xs underline" onClick={() => { setError(null); setStorageMessage(null) }}>ปิดข้อความ</button>
           </div>
         )}
-        <div className={`${focusMode ? "fixed inset-0 z-[90] grid gap-0 bg-background p-1.5 sm:p-2" : "grid gap-4"} ${workspaceLayoutClass}`} data-focus-mode={focusMode ? "true" : "false"}>
+        <div className={`${focusMode ? "fixed inset-0 z-[90] grid gap-0 bg-background p-1.5 sm:p-2" : bounded3D ? "grid min-h-0 flex-1 gap-4" : "grid gap-4"} ${workspaceLayoutClass}`} data-focus-mode={focusMode ? "true" : "false"}>
 
           {showLeftPanel && (
           <aside className="h-fit rounded-3xl border border-border bg-card p-4 shadow-sm xl:sticky xl:top-6">
@@ -1271,8 +1272,8 @@ export default function UploadPage() {
           </aside>
           )}
 
-          <div className={focusMode ? "h-full min-h-0 min-w-0" : "min-w-0 space-y-4"}>
-            <section className={`relative overflow-hidden rounded-3xl border border-border bg-card shadow-sm ${focusMode ? "flex h-full min-h-0 flex-col p-0" : "p-2 sm:p-3"}`}>
+          <div className={focusMode || bounded3D ? "h-full min-h-0 min-w-0" : "min-w-0 space-y-4"}>
+            <section className={`relative overflow-hidden rounded-3xl border border-border bg-card shadow-sm ${focusMode || bounded3D ? "flex h-full min-h-0 flex-col p-0" : "p-2 sm:p-3"}`}>
               {!focusMode && <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-secondary/60 px-3 py-2">
                 <div>
                   <p className="text-sm font-semibold">{workspaceView === "3d" ? "สำรวจและแก้ไขโมเดล 3D" : "แก้ไขแปลน / AI Detection"}</p>
@@ -1283,7 +1284,7 @@ export default function UploadPage() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                {hasWorkspace && <Button type="button" size="icon-sm" variant="outline" className="rounded-xl" aria-label="Enter Focus Mode" aria-keyshortcuts="F" title="Expand workspace (F)" onClick={enterFocus}><Maximize2 aria-hidden="true" className="h-4 w-4" /></Button>}
+                {hasWorkspace && workspaceView !== "3d" && <Button type="button" size="icon-sm" variant="outline" className="rounded-xl" aria-label="Enter Focus Mode" aria-keyshortcuts="F" title="Expand workspace (F)" onClick={enterFocus}><Maximize2 aria-hidden="true" className="h-4 w-4" /></Button>}
                 {hasWorkspace ? (
                   <div className="flex rounded-xl border border-border bg-background p-1">
                     <Button type="button" size="sm" variant={workspaceView === "2d" ? "default" : "ghost"} className="rounded-lg" onClick={() => setWorkspaceView("2d")}>
@@ -1350,6 +1351,7 @@ export default function UploadPage() {
 
               {hasWorkspace && imageSize && workspaceView === "3d" && (
                 <EditableFloorPlan3D
+                  onEnterFocus={enterFocus}
                   focusMode={focusMode}
                   onExitFocus={exitFocus}
                   onSwitchWorkspace={setWorkspaceView}

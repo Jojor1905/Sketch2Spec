@@ -51,7 +51,8 @@ with sync_playwright() as p:
     assert page.locator('canvas[data-walk-eye-height]').get_attribute('data-walk-eye-height')=='1.65'
     assert page.get_by_role('button',name='ปรับขนาด').count()==0,'structural controls must be hidden in Walk Mode'
     page.get_by_role('button',name='Start walking').click()
-    page.wait_for_function('document.pointerLockElement !== null')
+    expect(page.get_by_role('status').filter(has_text='WASD เดิน')).to_be_visible()
+    assert page.evaluate('document.pointerLockElement === null'), 'Walk keeps the cursor available'
     page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
     start=position(page)
     forward=move_until(page,'w',1,start[1],.3)
@@ -66,8 +67,16 @@ with sync_playwright() as p:
     blocked=position(page)
     assert blocked[1] > -2.0,blocked
     canvas=page.locator('canvas[data-walk-eye-height]')
-    box=canvas.bounding_box();page.mouse.click(box['x']+box['width']/2,box['y']+box['height']/2)
-    page.wait_for_function('document.pointerLockElement === null')
+    # A drag looks around without locking or hiding the system cursor.
+    box=canvas.bounding_box(); page.mouse.move(box['x']+box['width']/2,box['y']+box['height']/2)
+    before_view=canvas.screenshot(); page.mouse.down(); page.mouse.move(box['x']+box['width']/2+80,box['y']+box['height']/2+10,steps=10); page.mouse.up()
+    page.wait_for_timeout(300)
+    assert canvas.screenshot()!=before_view
+    assert page.evaluate('document.pointerLockElement === null')
+    page.get_by_role('button',name='พักการเดิน',exact=True).click()
+    expect(page.get_by_role('button',name='Resume walking')).to_be_visible()
+    page.get_by_role('button',name='Resume walking').click()
+    page.mouse.click(box['x']+box['width']/2,box['y']+box['height']/2)
     expect(page.get_by_text('Exterior',exact=True).first).to_be_visible()
     expect(page.get_by_label('Search materials')).to_be_visible()
     before=saved(page)

@@ -12,28 +12,33 @@ type Props = {
   imageSize: ImageSize
   scale: number
   openingsByWall: Map<string, Detection[]>
-  onLocked: (locked: boolean) => void
-  onExit: () => void
+  active: boolean
+  onActive: (active: boolean) => void
   onHover: (id: string | null, side?: WallSide) => void
   onSelect: (id: string, side?: WallSide, position?: number, hit?: SurfaceRayHit) => void
 }
 
-/** Browser pointer lock keeps mouse look separate from catalog pointer interaction. */
-export function WalkController({ detections, imageSize, scale, openingsByWall, onLocked, onExit, onHover, onSelect }: Props) {
+/** Drag to look; keep the system cursor available for editor controls. */
+export function WalkController({ detections, imageSize, scale, openingsByWall, active, onActive, onHover, onSelect }: Props) {
   const { camera, gl, scene, raycaster } = useThree()
   const collision = useMemo(() => buildWalkCollision(detections,imageSize,scale,openingsByWall),[detections,imageSize,scale,openingsByWall])
-  const callbacks = useRef({ onLocked, onExit, onHover, onSelect })
-  callbacks.current = { onLocked, onExit, onHover, onSelect }
+  const callbacks = useRef({ onActive, onHover, onSelect })
+  callbacks.current = { onActive, onHover, onSelect }
   const currentDetections = useRef(detections)
   currentDetections.current = detections
   const keys = useRef(new Set<string>())
-  const selectedUnlock = useRef(false)
-  const locked = useRef(false)
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const pointer = useRef(new Vector2())
+  const gesture = useRef<{x: number; y: number; lastX: number; lastY: number; moved: boolean} | null>(null)
+  useEffect(() => {
+    if (!active) { keys.current.clear(); gesture.current = null; onHover(null) }
+  }, [active, onHover])
   const elapsed = useRef(0)
   const lastHover = useRef("")
 
   function crosshairHit() {
-    raycaster.setFromCamera(new Vector2(0,0),camera)
+    raycaster.setFromCamera(pointer.current,camera)
     for (const intersection of raycaster.intersectObjects(scene.children,true)) {
       let object: typeof intersection.object | null = intersection.object
       while (object && !object.userData.editorId) object = object.parent
@@ -59,25 +64,30 @@ export function WalkController({ detections, imageSize, scale, openingsByWall, o
     perspective.fov = 68
     perspective.updateProjectionMatrix()
     const canvas = gl.domElement
-    const lockChange = () => {
-      const active = document.pointerLockElement === canvas
-      locked.current = active
-      callbacks.current.onLocked(active)
-      if (!active) {
-        keys.current.clear()
-        lastHover.current = ""
-        callbacks.current.onHover(null)
-        if (selectedUnlock.current) selectedUnlock.current = false
-        else callbacks.current.onExit()
-      }
+    const updatePointer = (event: MouseEvent) => {
+      const box = canvas.getBoundingClientRect()
+      pointer.current.set((event.clientX-box.left)/box.width*2-1, -(event.clientY-box.top)/box.height*2+1)
+    }
+    const beginLook = (event: MouseEvent) => {
+      if (!activeRef.current || event.button !== 0) return
+      updatePointer(event)
+      gesture.current = {x:event.clientX,y:event.clientY,lastX:event.clientX,lastY:event.clientY,moved:false}
     }
     const look = (event: MouseEvent) => {
-      if (!locked.current) return
-      camera.rotation.y -= event.movementX * 0.0022
-      camera.rotation.x = Math.max(-Math.PI*0.44,Math.min(Math.PI*0.44,camera.rotation.x-event.movementY*0.0022))
+      const drag = gesture.current
+      if (!activeRef.current || !drag) return
+      if (Math.hypot(event.clientX-drag.x,event.clientY-drag.y)>4) drag.moved = true
+      if (drag.moved) {
+        camera.rotation.y -= (event.clientX-drag.lastX)*0.004
+        camera.rotation.x = Math.max(-Math.PI*0.44,Math.min(Math.PI*0.44,camera.rotation.x-(event.clientY-drag.lastY)*0.004))
+      }
+      drag.lastX=event.clientX; drag.lastY=event.clientY
     }
+    const pause = () => { keys.current.clear(); gesture.current=null; callbacks.current.onActive(false) }
     const keyDown = (event: KeyboardEvent) => {
-      if (!locked.current) return
+      if (!activeRef.current) return
+      const target = event.target as HTMLElement | null
+      if (target?.closest("input, textarea, select, [contenteditable=true]")) return
       if (["KeyW","KeyA","KeyS","KeyD","ArrowUp","ArrowDown","ArrowLeft","ArrowRight","ShiftLeft","ShiftRight"].includes(event.code)) {
         event.preventDefault()
         keys.current.add(event.code)
@@ -85,7 +95,10 @@ export function WalkController({ detections, imageSize, scale, openingsByWall, o
     }
     const keyUp = (event: KeyboardEvent) => keys.current.delete(event.code)
     const selectAtCrosshair = (event: MouseEvent) => {
-      if (!locked.current || event.button !== 0) return
+      const drag = gesture.current
+      gesture.current = null
+      if (!activeRef.current || event.button !== 0 || !drag || drag.moved) return
+      updatePointer(event)
       const hit = crosshairHit()
       if (hit) {
         const { intersection, detection, normal, side } = hit
@@ -95,34 +108,36 @@ export function WalkController({ detections, imageSize, scale, openingsByWall, o
           normal:normal ? {x:normal.x,y:normal.y,z:normal.z} : undefined,
           uv:intersection.uv ? {x:intersection.uv.x,y:intersection.uv.y} : undefined,
         })
-        selectedUnlock.current = true
-        document.exitPointerLock()
+        pause()
       }
     }
-    document.addEventListener("pointerlockchange",lockChange)
+    canvas.addEventListener("mousedown",beginLook)
+    canvas.addEventListener("mousemove",updatePointer)
+    window.addEventListener("blur",pause)
     document.addEventListener("mousemove",look)
     window.addEventListener("keydown",keyDown)
     window.addEventListener("keyup",keyUp)
-    canvas.addEventListener("mousedown",selectAtCrosshair,true)
+    window.addEventListener("mouseup",selectAtCrosshair)
     return () => {
-      document.removeEventListener("pointerlockchange",lockChange)
+      canvas.removeEventListener("mousedown",beginLook)
+      canvas.removeEventListener("mousemove",updatePointer)
+      window.removeEventListener("blur",pause)
       document.removeEventListener("mousemove",look)
       window.removeEventListener("keydown",keyDown)
       window.removeEventListener("keyup",keyUp)
-      canvas.removeEventListener("mousedown",selectAtCrosshair,true)
-      if (document.pointerLockElement === canvas) document.exitPointerLock()
+      window.removeEventListener("mouseup",selectAtCrosshair)
       perspective.fov = oldFov
       perspective.updateProjectionMatrix()
       delete canvas.dataset.walkEyeHeight
       delete canvas.dataset.walkPosition
-      callbacks.current.onLocked(false)
+      callbacks.current.onActive(false)
     }
     // Mode entry has one camera setup. Geometry changes affect collision via useMemo below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useFrame((_, delta) => {
-    if (!locked.current) return
+    if (!activeRef.current) return
     elapsed.current += delta
     if (elapsed.current >= 0.1) {
       elapsed.current = 0
