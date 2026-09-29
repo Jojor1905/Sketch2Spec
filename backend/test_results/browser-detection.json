@@ -1,0 +1,853 @@
+{
+  "id": "9c3f8f1949974623a144d479fa81095c",
+  "status": "complete",
+  "phase": "complete",
+  "progress": 100,
+  "message": "Detection workspace is ready",
+  "result": {
+    "image": {
+      "width": 842,
+      "height": 569
+    },
+    "count": 64,
+    "detections": [
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.8129,
+        "box": {
+          "x1": 87.71,
+          "y1": 21.36,
+          "x2": 142.19,
+          "y2": 92.45,
+          "width": 54.48,
+          "height": 71.08
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.8065,
+        "box": {
+          "x1": 275.18,
+          "y1": 87.92,
+          "x2": 288.19,
+          "y2": 167.66,
+          "width": 13.02,
+          "height": 79.74
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.7712,
+        "box": {
+          "x1": 527.18,
+          "y1": 121.42,
+          "x2": 780.91,
+          "y2": 134.65,
+          "width": 253.73,
+          "height": 13.23
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.7436,
+        "box": {
+          "x1": 668.6,
+          "y1": 122.1,
+          "x2": 700.15,
+          "y2": 136.58,
+          "width": 31.55,
+          "height": 14.48
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.7417,
+        "box": {
+          "x1": 29.64,
+          "y1": 118.58,
+          "x2": 42.97,
+          "y2": 555.35,
+          "width": 13.33,
+          "height": 436.77
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.7297,
+        "box": {
+          "x1": 528.21,
+          "y1": 120.68,
+          "x2": 542.19,
+          "y2": 167.73,
+          "width": 13.98,
+          "height": 47.05
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.7291,
+        "box": {
+          "x1": 28.06,
+          "y1": 120.68,
+          "x2": 102.85,
+          "y2": 132.79,
+          "width": 74.79,
+          "height": 12.11
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.726,
+        "box": {
+          "x1": 228.42,
+          "y1": 20.07,
+          "x2": 288.44,
+          "y2": 92.46,
+          "width": 60.02,
+          "height": 72.39
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.7253,
+        "box": {
+          "x1": 280.92,
+          "y1": 154.74,
+          "x2": 541.52,
+          "y2": 167.77,
+          "width": 260.6,
+          "height": 13.03
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.7216,
+        "box": {
+          "x1": 613.71,
+          "y1": 122.84,
+          "x2": 646.33,
+          "y2": 136.76,
+          "width": 32.62,
+          "height": 13.92
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.7191,
+        "box": {
+          "x1": 766.69,
+          "y1": 119.68,
+          "x2": 781.21,
+          "y2": 563.24,
+          "width": 14.51,
+          "height": 443.56
+        }
+      },
+      {
+        "class_id": 0,
+        "label": "door",
+        "confidence": 0.7154,
+        "box": {
+          "x1": 199.79,
+          "y1": 444.19,
+          "x2": 229.19,
+          "y2": 451.13,
+          "width": 29.4,
+          "height": 6.94
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.7133,
+        "box": {
+          "x1": 27.79,
+          "y1": 172.78,
+          "x2": 41.75,
+          "y2": 215.95,
+          "width": 13.95,
+          "height": 43.16
+        }
+      },
+      {
+        "class_id": 0,
+        "label": "door",
+        "confidence": 0.7029,
+        "box": {
+          "x1": 574.5,
+          "y1": 364.0,
+          "x2": 606.07,
+          "y2": 371.3,
+          "width": 31.57,
+          "height": 7.3
+        }
+      },
+      {
+        "class_id": 0,
+        "label": "door",
+        "confidence": 0.6982,
+        "box": {
+          "x1": 213.37,
+          "y1": 304.2,
+          "x2": 244.47,
+          "y2": 311.43,
+          "width": 31.1,
+          "height": 7.24
+        }
+      },
+      {
+        "class_id": 0,
+        "label": "door",
+        "confidence": 0.6894,
+        "box": {
+          "x1": 170.73,
+          "y1": 401.23,
+          "x2": 177.82,
+          "y2": 432.08,
+          "width": 7.1,
+          "height": 30.85
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.685,
+        "box": {
+          "x1": 98.33,
+          "y1": 541.18,
+          "x2": 135.82,
+          "y2": 555.6,
+          "width": 37.49,
+          "height": 14.43
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.6844,
+        "box": {
+          "x1": 327.78,
+          "y1": 540.94,
+          "x2": 370.71,
+          "y2": 555.7,
+          "width": 42.92,
+          "height": 14.76
+        }
+      },
+      {
+        "class_id": 0,
+        "label": "door",
+        "confidence": 0.6787,
+        "box": {
+          "x1": 322.51,
+          "y1": 155.24,
+          "x2": 384.89,
+          "y2": 169.53,
+          "width": 62.39,
+          "height": 14.29
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.678,
+        "box": {
+          "x1": 719.85,
+          "y1": 121.79,
+          "x2": 755.14,
+          "y2": 135.49,
+          "width": 35.3,
+          "height": 13.7
+        }
+      },
+      {
+        "class_id": 0,
+        "label": "door",
+        "confidence": 0.6664,
+        "box": {
+          "x1": 170.46,
+          "y1": 313.12,
+          "x2": 177.92,
+          "y2": 343.17,
+          "width": 7.46,
+          "height": 30.05
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.6657,
+        "box": {
+          "x1": 140.57,
+          "y1": 20.93,
+          "x2": 231.14,
+          "y2": 35.57,
+          "width": 90.57,
+          "height": 14.64
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.6582,
+        "box": {
+          "x1": 463.53,
+          "y1": 541.17,
+          "x2": 500.87,
+          "y2": 555.9,
+          "width": 37.34,
+          "height": 14.73
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.6577,
+        "box": {
+          "x1": 765.15,
+          "y1": 144.82,
+          "x2": 780.76,
+          "y2": 184.41,
+          "width": 15.61,
+          "height": 39.59
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.6516,
+        "box": {
+          "x1": 24.28,
+          "y1": 539.0,
+          "x2": 781.96,
+          "y2": 553.87,
+          "width": 757.68,
+          "height": 14.87
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.6511,
+        "box": {
+          "x1": 28.23,
+          "y1": 247.37,
+          "x2": 42.65,
+          "y2": 288.11,
+          "width": 14.42,
+          "height": 40.75
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.645,
+        "box": {
+          "x1": 764.7,
+          "y1": 315.98,
+          "x2": 780.45,
+          "y2": 353.74,
+          "width": 15.75,
+          "height": 37.76
+        }
+      },
+      {
+        "class_id": 0,
+        "label": "door",
+        "confidence": 0.6443,
+        "box": {
+          "x1": 422.19,
+          "y1": 154.87,
+          "x2": 484.51,
+          "y2": 169.29,
+          "width": 62.32,
+          "height": 14.42
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.6352,
+        "box": {
+          "x1": 172.95,
+          "y1": 541.1,
+          "x2": 207.08,
+          "y2": 555.81,
+          "width": 34.13,
+          "height": 14.71
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.6254,
+        "box": {
+          "x1": 27.91,
+          "y1": 407.03,
+          "x2": 42.17,
+          "y2": 443.71,
+          "width": 14.26,
+          "height": 36.68
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.613,
+        "box": {
+          "x1": 89.08,
+          "y1": 90.09,
+          "x2": 102.24,
+          "y2": 133.85,
+          "width": 13.16,
+          "height": 43.76
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.6052,
+        "box": {
+          "x1": 157.55,
+          "y1": 443.39,
+          "x2": 298.6,
+          "y2": 449.97,
+          "width": 141.04,
+          "height": 6.58
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.6012,
+        "box": {
+          "x1": 231.83,
+          "y1": 33.23,
+          "x2": 279.75,
+          "y2": 88.94,
+          "width": 47.92,
+          "height": 55.72
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.5817,
+        "box": {
+          "x1": 553.56,
+          "y1": 121.68,
+          "x2": 586.08,
+          "y2": 136.01,
+          "width": 32.52,
+          "height": 14.33
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.5674,
+        "box": {
+          "x1": 144.6,
+          "y1": 22.58,
+          "x2": 179.34,
+          "y2": 36.41,
+          "width": 34.74,
+          "height": 13.83
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.5544,
+        "box": {
+          "x1": 90.24,
+          "y1": 31.41,
+          "x2": 134.08,
+          "y2": 90.42,
+          "width": 43.83,
+          "height": 59.01
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.5503,
+        "box": {
+          "x1": 28.37,
+          "y1": 482.01,
+          "x2": 42.19,
+          "y2": 515.84,
+          "width": 13.83,
+          "height": 33.83
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.5485,
+        "box": {
+          "x1": 151.29,
+          "y1": 443.77,
+          "x2": 159.02,
+          "y2": 555.3,
+          "width": 7.73,
+          "height": 111.53
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.5368,
+        "box": {
+          "x1": 291.69,
+          "y1": 444.43,
+          "x2": 298.06,
+          "y2": 555.0,
+          "width": 6.37,
+          "height": 110.56
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.5308,
+        "box": {
+          "x1": 171.54,
+          "y1": 305.9,
+          "x2": 178.83,
+          "y2": 447.88,
+          "width": 7.28,
+          "height": 141.98
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.5303,
+        "box": {
+          "x1": 34.38,
+          "y1": 343.68,
+          "x2": 178.62,
+          "y2": 349.6,
+          "width": 144.24,
+          "height": 5.91
+        }
+      },
+      {
+        "class_id": 0,
+        "label": "door",
+        "confidence": 0.5297,
+        "box": {
+          "x1": 349.34,
+          "y1": 364.1,
+          "x2": 379.58,
+          "y2": 371.21,
+          "width": 30.23,
+          "height": 7.11
+        }
+      },
+      {
+        "class_id": 0,
+        "label": "door",
+        "confidence": 0.513,
+        "box": {
+          "x1": 313.59,
+          "y1": 364.48,
+          "x2": 345.65,
+          "y2": 371.4,
+          "width": 32.06,
+          "height": 6.91
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.4964,
+        "box": {
+          "x1": 363.04,
+          "y1": 280.96,
+          "x2": 415.47,
+          "y2": 287.01,
+          "width": 52.44,
+          "height": 6.05
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.4849,
+        "box": {
+          "x1": 765.11,
+          "y1": 438.86,
+          "x2": 780.08,
+          "y2": 485.85,
+          "width": 14.97,
+          "height": 46.98
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.4703,
+        "box": {
+          "x1": 528.99,
+          "y1": 364.45,
+          "x2": 537.59,
+          "y2": 553.41,
+          "width": 8.59,
+          "height": 188.96
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.4531,
+        "box": {
+          "x1": 525.48,
+          "y1": 363.21,
+          "x2": 778.27,
+          "y2": 370.13,
+          "width": 252.78,
+          "height": 6.92
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.4445,
+        "box": {
+          "x1": 291.88,
+          "y1": 161.77,
+          "x2": 297.98,
+          "y2": 442.95,
+          "width": 6.1,
+          "height": 281.18
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.4418,
+        "box": {
+          "x1": 322.21,
+          "y1": 155.24,
+          "x2": 384.98,
+          "y2": 169.17,
+          "width": 62.77,
+          "height": 13.93
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.439,
+        "box": {
+          "x1": 146.95,
+          "y1": 21.08,
+          "x2": 226.11,
+          "y2": 36.02,
+          "width": 79.16,
+          "height": 14.94
+        }
+      },
+      {
+        "class_id": 0,
+        "label": "door",
+        "confidence": 0.4204,
+        "box": {
+          "x1": 765.55,
+          "y1": 391.97,
+          "x2": 779.62,
+          "y2": 423.01,
+          "width": 14.07,
+          "height": 31.04
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.4167,
+        "box": {
+          "x1": 88.71,
+          "y1": 21.8,
+          "x2": 145.05,
+          "y2": 120.55,
+          "width": 56.35,
+          "height": 98.74
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.4123,
+        "box": {
+          "x1": 32.41,
+          "y1": 302.17,
+          "x2": 300.71,
+          "y2": 308.99,
+          "width": 268.3,
+          "height": 6.82
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.3903,
+        "box": {
+          "x1": 33.58,
+          "y1": 302.82,
+          "x2": 213.56,
+          "y2": 309.74,
+          "width": 179.98,
+          "height": 6.92
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.3883,
+        "box": {
+          "x1": 230.49,
+          "y1": 21.7,
+          "x2": 286.58,
+          "y2": 90.58,
+          "width": 56.09,
+          "height": 68.88
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.3822,
+        "box": {
+          "x1": 421.15,
+          "y1": 363.16,
+          "x2": 781.11,
+          "y2": 370.24,
+          "width": 359.97,
+          "height": 7.07
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.3808,
+        "box": {
+          "x1": 175.38,
+          "y1": 304.2,
+          "x2": 295.33,
+          "y2": 310.35,
+          "width": 119.94,
+          "height": 6.16
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.3645,
+        "box": {
+          "x1": 291.37,
+          "y1": 166.08,
+          "x2": 297.83,
+          "y2": 365.82,
+          "width": 6.46,
+          "height": 199.74
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.3366,
+        "box": {
+          "x1": 366.15,
+          "y1": 238.39,
+          "x2": 411.43,
+          "y2": 244.76,
+          "width": 45.28,
+          "height": 6.37
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.3143,
+        "box": {
+          "x1": 363.93,
+          "y1": 277.91,
+          "x2": 414.52,
+          "y2": 286.15,
+          "width": 50.59,
+          "height": 8.24
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.3107,
+        "box": {
+          "x1": 291.79,
+          "y1": 166.61,
+          "x2": 297.9,
+          "y2": 310.33,
+          "width": 6.11,
+          "height": 143.72
+        }
+      },
+      {
+        "class_id": 2,
+        "label": "window",
+        "confidence": 0.3071,
+        "box": {
+          "x1": 451.57,
+          "y1": 540.13,
+          "x2": 500.77,
+          "y2": 554.14,
+          "width": 49.2,
+          "height": 14.01
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.2944,
+        "box": {
+          "x1": 571.35,
+          "y1": 203.87,
+          "x2": 576.77,
+          "y2": 260.51,
+          "width": 5.41,
+          "height": 56.65
+        }
+      },
+      {
+        "class_id": 1,
+        "label": "wall",
+        "confidence": 0.2769,
+        "box": {
+          "x1": 290.92,
+          "y1": 363.41,
+          "x2": 561.58,
+          "y2": 370.1,
+          "width": 270.66,
+          "height": 6.7
+        }
+      }
+    ],
+    "blender": {
+      "status": "skipped",
+      "reason": "GENERATE_BLENDER is disabled"
+    }
+  },
+  "error": null
+}
