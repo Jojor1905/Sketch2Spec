@@ -129,6 +129,16 @@ corepack pnpm@latest-10 run dev
 NEXT_PUBLIC_DETECTION_API_URL=http://localhost:8000
 ```
 
+## Login และการทำงานคนละพอร์ต
+
+หน้า `/upload` ต้องลงชื่อเข้าใช้ก่อน โดยค่าเริ่มต้นสำหรับเครื่องพัฒนาคือ `admin1234` / `admin1234` และ backend เป็นผู้ตรวจรหัสผ่านและเก็บ session ใน HttpOnly cookie
+
+สร้าง `backend/.env` หรือกำหนด environment variables ตอนเริ่ม backend ตาม [`.env.example`](.env.example) โดยอย่างน้อยตั้ง `AUTH_SECRET` เป็นค่ายาวที่ไม่ซ้ำสำหรับ deployment จริง ห้าม commit ไฟล์ `.env`
+
+Frontend สามารถใช้ `localhost:3000`, `3001` หรือพอร์ตอื่นได้ เพราะ backend อนุญาตเฉพาะ localhost ทุกพอร์ตในการพัฒนา และ frontend ส่ง cookie ด้วย `credentials: "include"` เสมอ
+
+สำหรับ Vercel กับ backend HTTPS บน Colab หรือ hosting อื่น ให้ตั้ง `NEXT_PUBLIC_DETECTION_API_URL` บน Vercel เป็น URL backend, ตั้ง `ALLOWED_ORIGINS=https://<your-vercel-domain>` และ `AUTH_COOKIE_SECURE=true` บน backend ก่อน deploy
+
 ## ไฟล์ที่รองรับ
 
 - JPG

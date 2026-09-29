@@ -261,9 +261,17 @@ export default function UploadPage() {
   const historyIndexRef = useRef(-1)
 
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
+  const [authReady, setAuthReady] = useState(false)
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const [storageMessage, setStorageMessage] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
+
+  useEffect(() => {
+    fetch(`${API_URL}/auth/session`, { credentials: "include" })
+      .then(response => { if (!response.ok) router.replace("/login?next=/upload") })
+      .catch(() => router.replace("/login?next=/upload"))
+      .finally(() => setAuthReady(true))
+  }, [router])
 
   const [file, setFile] = useState<File | null>(null)
   const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null)
@@ -609,7 +617,7 @@ export default function UploadPage() {
 
       const response = await fetch(`${API_URL}/prepare?page=${selectedPage}`, {
         method: "POST",
-        body: formData,
+        body: formData, credentials: "include",
       })
       if (!response.ok) {
         const backendMessage = await extractError(response)
@@ -638,7 +646,7 @@ export default function UploadPage() {
       formData.append("file", pdfFile)
       const response = await fetch(`${API_URL}/pdf/info`, {
         method: "POST",
-        body: formData,
+        body: formData, credentials: "include",
       })
       if (!response.ok) {
         const backendMessage = await extractError(response)
@@ -826,7 +834,7 @@ export default function UploadPage() {
       const legacyResponse = await fetch(`${API_URL}/detect`, {
         method: "POST",
         body: legacyFormData,
-        signal: controller.signal,
+        signal: controller.signal, credentials: "include",
       })
       if (!legacyResponse.ok) {
         const message = await extractError(legacyResponse)
@@ -844,7 +852,7 @@ export default function UploadPage() {
       const createResponse = await fetch(`${API_URL}/detect/jobs`, {
         method: "POST",
         body: formData,
-        signal: controller.signal,
+        signal: controller.signal, credentials: "include",
       })
 
       // Backward compatibility: the original backend only exposes POST /detect.
@@ -862,7 +870,7 @@ export default function UploadPage() {
           await sleep(280, controller.signal)
           const statusResponse = await fetch(`${API_URL}/detect/jobs/${created.job_id}`, {
             signal: controller.signal,
-            cache: "no-store",
+            cache: "no-store", credentials: "include",
           })
 
           // If an older/restarted backend loses the in-memory job, retry using
@@ -1056,6 +1064,8 @@ export default function UploadPage() {
     commitDetections([...editableDetections, copy])
     setSelectedId(copy.id)
   }
+
+  if (!authReady) return <main className="grid min-h-screen place-items-center text-sm text-muted-foreground">กำลังตรวจสอบการเข้าสู่ระบบ…</main>
 
   return (
     <main className={`${bounded3D ? "h-dvh overflow-hidden px-3 py-3" : "min-h-screen px-4 py-5 sm:px-6 sm:py-8"} bg-background text-foreground`}>
@@ -1284,7 +1294,7 @@ export default function UploadPage() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                {hasWorkspace && workspaceView !== "3d" && <Button type="button" size="icon-sm" variant="outline" className="rounded-xl" aria-label="Enter Focus Mode" aria-keyshortcuts="F" title="Expand workspace (F)" onClick={enterFocus}><Maximize2 aria-hidden="true" className="h-4 w-4" /></Button>}
+                {hasWorkspace && workspaceView !== "3d" && <Button type="button" size="icon-sm" variant="outline" className="rounded-xl" aria-label="Enter Focus Mode" aria-keyshortcuts="F" title="ขยายพื้นที่ทำงาน (F)" onClick={enterFocus}><Maximize2 aria-hidden="true" className="h-4 w-4" /></Button>}
                 {hasWorkspace ? (
                   <div className="flex rounded-xl border border-border bg-background p-1">
                     <Button type="button" size="sm" variant={workspaceView === "2d" ? "default" : "ghost"} className="rounded-lg" onClick={() => setWorkspaceView("2d")}>

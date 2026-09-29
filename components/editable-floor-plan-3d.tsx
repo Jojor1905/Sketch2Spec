@@ -5364,8 +5364,14 @@ export function EditableFloorPlan3D(props: Props) {
         )}
 
         {!props.focusMode && buildTool !== "walk" && (
+          <Button type="button" size="icon-sm" variant="outline" className={`absolute right-[235px] sm:right-[275px] top-3 z-30 h-10 w-10 rounded-full border-white/80 bg-white/95 shadow-lg backdrop-blur-md transition-transform hover:scale-105 ${selected && (materialsOpen || inspectorOpen) ? "hidden sm:inline-flex" : "inline-flex"}`} title="Focus · ขยายพื้นที่ทำงาน (F)" aria-label="Enter Focus Mode" onClick={props.onEnterFocus}>
+            <Maximize2 className="h-4 w-4" />
+          </Button>
+        )}
+
+        {!props.focusMode && buildTool !== "walk" && (
           <div aria-label="มุมมองกล้อง" className={`absolute right-3 top-3 z-20 w-[224px] sm:w-[260px] rounded-2xl border border-white/80 bg-white/92 p-2 shadow-xl backdrop-blur-md ${selected && (materialsOpen || inspectorOpen) ? "hidden sm:block" : ""}`}>
-            <div className="mb-1 flex items-center justify-between px-1"><span className="text-xs font-medium">มุมมอง</span><Button type="button" size="icon-sm" variant="ghost" title="ขยายพื้นที่ทำงาน (F)" aria-label="Enter Focus Mode" onClick={props.onEnterFocus}><Maximize2 className="h-4 w-4" /></Button></div>
+            <div className="mb-1 flex items-center px-1"><span className="text-xs font-medium">มุมมอง</span></div>
             <div className="grid grid-cols-6 gap-1.5">
               <Button type="button" size="icon-sm" variant="ghost" className="rounded-xl" title="หมุนซ้าย" onClick={() => runCamera("rotate-left")}>
                 <RotateCcw className="h-4 w-4" />

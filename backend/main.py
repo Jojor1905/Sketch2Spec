@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import base64
+import hashlib
+import hmac
 import subprocess
 import threading
 import time
@@ -13,7 +16,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 import fitz
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -29,15 +32,87 @@ MAX_IMAGE_DIMENSION = 2000
 SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 JOB_TTL_SECONDS = 30 * 60
 
+
+def _load_local_env() -> None:
+    """Load backend/.env for local development without adding a runtime package."""
+    path = BASE_DIR / ".env"
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if "=" not in line or line.lstrip().startswith("#"):
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_local_env()
+DEMO_USERNAME = os.getenv("DEMO_USERNAME", "admin1234")
+DEMO_PASSWORD = os.getenv("DEMO_PASSWORD", "admin1234")
+AUTH_SECRET = os.getenv("AUTH_SECRET", "sketch2spec-local-development-only")
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "sketch2spec_session")
+AUTH_COOKIE_SECURE = os.getenv("AUTH_COOKIE_SECURE", "false").lower() == "true"
+AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "none" if AUTH_COOKIE_SECURE else "lax")
+AUTH_SESSION_SECONDS = int(os.getenv("AUTH_SESSION_SECONDS", str(60 * 60 * 12)))
+ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "").split(",") if origin.strip()]
+
 app = FastAPI(title="Sketch2Spec AI Detection API", version="3.1")
 
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
     allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _session_token(username: str, expires_at: int) -> str:
+    payload = f"{username}:{expires_at}"
+    signature = hmac.new(AUTH_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(f"{payload}:{signature}".encode()).decode()
+
+
+def _session_user(token: str | None) -> str | None:
+    if not token:
+        return None
+    try:
+        username, expires_at, signature = base64.urlsafe_b64decode(token.encode()).decode().rsplit(":", 2)
+        if int(expires_at) < time.time():
+            return None
+        expected = hmac.new(AUTH_SECRET.encode(), f"{username}:{expires_at}".encode(), hashlib.sha256).hexdigest()
+        return username if hmac.compare_digest(signature, expected) else None
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def require_session(request: Request) -> str:
+    username = _session_user(request.cookies.get(AUTH_COOKIE_NAME))
+    if not username:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Please sign in.")
+    return username
+
+
+@app.post("/auth/login")
+async def login(credentials: dict[str, str], response: Response) -> dict[str, str]:
+    username = credentials.get("username", "")
+    password = credentials.get("password", "")
+    if not (hmac.compare_digest(username, DEMO_USERNAME) and hmac.compare_digest(password, DEMO_PASSWORD)):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password.")
+    expires_at = int(time.time()) + AUTH_SESSION_SECONDS
+    response.set_cookie(AUTH_COOKIE_NAME, _session_token(username, expires_at), max_age=AUTH_SESSION_SECONDS, httponly=True, secure=AUTH_COOKIE_SECURE, samesite=AUTH_COOKIE_SAMESITE, path="/")
+    return {"username": username}
+
+
+@app.get("/auth/session")
+def session(username: str = Depends(require_session)) -> dict[str, str]:
+    return {"username": username}
+
+
+@app.post("/auth/logout")
+def logout(response: Response) -> dict[str, bool]:
+    response.delete_cookie(AUTH_COOKIE_NAME, path="/")
+    return {"ok": True}
 
 _model: Any | None = None
 _model_lock = threading.Lock()
@@ -96,7 +171,7 @@ def health_check() -> dict[str, Any]:
 
 
 @app.post("/pdf/info")
-async def pdf_info(file: UploadFile = File(...)) -> dict[str, int]:
+async def pdf_info(file: UploadFile = File(...), _: str = Depends(require_session)) -> dict[str, int]:
     data = await read_upload(file)
     if not is_pdf_upload(data, file.filename, file.content_type):
         raise HTTPException(status_code=400, detail="The uploaded file is not a PDF.")
@@ -114,7 +189,7 @@ async def pdf_info(file: UploadFile = File(...)) -> dict[str, int]:
 @app.post("/prepare")
 async def prepare_floor_plan(
     file: UploadFile = File(...),
-    page: int = Query(default=1, ge=1),
+    page: int = Query(default=1, ge=1), _: str = Depends(require_session),
 ) -> StreamingResponse:
     """Normalize an image or convert a selected PDF page into a PNG preview."""
     data = await read_upload(file)
@@ -139,7 +214,7 @@ async def prepare_floor_plan(
 @app.post("/detect/jobs", status_code=202)
 async def create_detection_job(
     file: UploadFile = File(...),
-    confidence: float = Query(default=0.25, ge=0.01, le=0.99),
+    confidence: float = Query(default=0.25, ge=0.01, le=0.99), _: str = Depends(require_session),
 ) -> dict[str, str]:
     """Start a real detection job so the UI can show backend-reported progress."""
     _cleanup_jobs()
@@ -171,7 +246,7 @@ async def create_detection_job(
 
 
 @app.get("/detect/jobs/{job_id}")
-def get_detection_job(job_id: str) -> dict[str, Any]:
+def get_detection_job(job_id: str, _: str = Depends(require_session)) -> dict[str, Any]:
     _cleanup_jobs()
     with _job_lock:
         job = _jobs.get(job_id)
@@ -189,7 +264,7 @@ def get_detection_job(job_id: str) -> dict[str, Any]:
 
 
 @app.delete("/detect/jobs/{job_id}")
-def delete_detection_job(job_id: str) -> dict[str, bool]:
+def delete_detection_job(job_id: str, _: str = Depends(require_session)) -> dict[str, bool]:
     with _job_lock:
         removed = _jobs.pop(job_id, None) is not None
     return {"deleted": removed}
@@ -198,7 +273,7 @@ def delete_detection_job(job_id: str) -> dict[str, bool]:
 @app.post("/detect")
 async def detect_floor_plan(
     file: UploadFile = File(...),
-    confidence: float = Query(default=0.25, ge=0.01, le=0.99),
+    confidence: float = Query(default=0.25, ge=0.01, le=0.99), _: str = Depends(require_session),
 ) -> dict[str, Any]:
     """Compatibility endpoint for clients that do not use job polling."""
     data = await read_upload(file)
