@@ -3,6 +3,7 @@ import base64,json,re,time
 from io import BytesIO
 from pathlib import Path
 from PIL import Image,ImageDraw
+from auth_test_helpers import login_page
 from playwright.sync_api import sync_playwright,expect
 OUT=Path(__file__).parent/'test_results'; OUT.mkdir(exist_ok=True)
 READ="""() => new Promise((resolve,reject)=>{const r=indexedDB.open('sketch2spec',1);r.onsuccess=()=>{const db=r.result;const q=db.transaction('projects').objectStore('projects').get('active');q.onsuccess=()=>{db.close();resolve(q.result)};q.onerror=()=>reject(q.error)};r.onerror=()=>reject(r.error)})"""
@@ -28,6 +29,7 @@ with sync_playwright() as p:
     browser=p.chromium.launch(channel='chrome',headless=True,timeout=30000)
     page=browser.new_page(viewport=dict(width=1600,height=1250));errors=[]
     page.on('pageerror',lambda e:errors.append(str(e)))
+    login_page(page)
     page.goto('http://localhost:3000/upload')
     expect(page.get_by_role('button',name='เปิดโปรเจกต์',exact=True)).to_be_enabled()
     page.get_by_label('เปิดไฟล์โปรเจกต์',exact=True).set_input_files(dict(name='rooms.sketch2spec.json',mimeType='application/json',buffer=json.dumps(project).encode()))
@@ -111,6 +113,7 @@ with sync_playwright() as p:
         box=obj['box'];ldraw.rectangle([box['x1'],box['y1'],box['x2'],box['y2']],fill='black')
     lraw=BytesIO();lim.save(lraw,format='PNG')
     lproject['project']['previewDataUrl']='data:image/png;base64,'+base64.b64encode(lraw.getvalue()).decode()
+    login_page(page)
     page.goto('http://localhost:3000/upload')
     expect(page.get_by_role('button',name='เปิดโปรเจกต์',exact=True)).to_be_enabled()
     page.get_by_label('เปิดไฟล์โปรเจกต์',exact=True).set_input_files(dict(name='l-room.sketch2spec.json',mimeType='application/json',buffer=json.dumps(lproject).encode()))

@@ -4,130 +4,106 @@
 
 ## เอกสารสำหรับใช้งานและส่งต่องาน
 
+- [Login setup, environment variables, security, and authentication tests](docs/AUTHENTICATION.md) — configure both servers before opening `/login`; local demo: `admin1234` / `admin1234`.
 - [คู่มือแอป: ฟีเจอร์ วิธีใช้ วิธีรัน โครงสร้างโค้ด ข้อจำกัด และการทดสอบ](docs/APP_OVERVIEW.md)
 - [รายละเอียดห้อง พื้น และวัสดุรายผิว](docs/rooms-and-materials.md)
 
 เอกสารคู่มือแอปสรุปพฤติกรรมปัจจุบัน รวมเมนูทาสีผนังแบบเลือกห้องและหมายเลขผนัง
 
-## ความต้องการของระบบ
+## ติดตั้งบนเครื่องใหม่ (Windows / VS Code)
 
-- Node.js 20 ขึ้นไป
-- Python 3.11
-- macOS หรือ Windows (ทดสอบการแก้ล่าสุดบน macOS)
-- โปรแกรมแก้ไขโค้ด เช่น VS Code ตามสะดวก
-- อินเทอร์เน็ตสำหรับติดตั้งแพ็กเกจครั้งแรก
-
-โปรเจกต์ใช้พาธแบบ Relative จึงแตก ZIP ไปไว้ที่ไดรฟ์หรือชื่อโฟลเดอร์ใดก็ได้
-
-## รัน Backend ครั้งแรก
-
-### macOS
-
-ติดตั้งครั้งแรกจากโฟลเดอร์โปรเจกต์:
-
-```bash
-brew install python@3.11
-python3.11 -m venv backend/.venv
-backend/.venv/bin/python -m pip install -r backend/requirements.txt
-npm ci
-```
-
-เปิด Terminal สองแท็บและรันจากโฟลเดอร์โปรเจกต์ (ครั้งถัดไปใช้เพียงสองชุดนี้):
-
-```bash
-cd ~/Downloads/Sketch2Spec-main
-backend/.venv/bin/python -m uvicorn main:app --app-dir backend --host 127.0.0.1 --port 8000
-```
-
-```bash
-cd ~/Downloads/Sketch2Spec-main
-npm run dev -- --hostname 127.0.0.1
-```
-
-เปิด http://localhost:3000/upload และตรวจ backend ที่ http://localhost:8000/health
-เปิดทั้งสองแท็บค้างไว้ระหว่างใช้งาน กด Control+C เพื่อหยุด
-ใช้โมเดลเดิมที่ `backend/best.pt` โดยไม่ต้องฝึกหรือดาวน์โหลดโมเดลใหม่
-
-หากต้องการรัน backend smoke test ให้ติดตั้ง `httpx` เพิ่มใน virtual environment:
-
-```bash
-backend/.venv/bin/python -m pip install httpx
-backend/.venv/bin/python backend/test_api_smoke.py
-```
-
-### Windows
-
-เปิด Terminal ที่โฟลเดอร์หลักของโปรเจกต์:
+1. ติดตั้ง **Python 3.11 แบบ 64-bit** และ **Node.js 24** แล้วปิดเปิด VS Code ใหม่
+2. แตก ZIP ก่อน และเปิดโฟลเดอร์ที่มี `package.json` ใน VS Code (อย่าเปิดแค่โฟลเดอร์ครอบด้านนอก)
+3. เปิด Terminal แบบ PowerShell แล้วติดตั้งครั้งแรก:
 
 ```powershell
-python -m venv .\backend\.venv
-.\backend\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\backend\.venv\Scripts\python.exe -m pip install -r .\backend\requirements.txt
-.\backend\.venv\Scripts\python.exe -m uvicorn main:app --reload --app-dir .\backend
+npm.cmd run setup
 ```
 
-ตรวจสอบ Backend:
-
-```text
-http://localhost:8000/health
-http://localhost:8000/docs
-```
-
-ไฟล์โมเดลต้องอยู่ที่:
-
-```text
-backend/best.pt
-```
-
-## รัน Backend ครั้งถัดไป
+4. เมื่อติดตั้งเสร็จ เปิดทั้ง Backend และ Frontend ด้วยคำสั่งเดียว:
 
 ```powershell
-.\backend\.venv\Scripts\python.exe -m uvicorn main:app --reload --app-dir .\backend
+npm.cmd run local
 ```
 
-## รัน Frontend ครั้งแรก
+5. รอข้อความ Ready แล้วเปิด http://localhost:3000/login
 
-เปิด Terminal ใหม่ที่โฟลเดอร์หลัก:
+บัญชี Demo สำหรับใช้บนเครื่องตัวเอง: **admin1234 / admin1234**
+กด Ctrl+C เพื่อปิดทั้งสองระบบ ครั้งถัดไปใช้แค่ `npm.cmd run local`
+ไม่ต้อง Activate virtual environment ไม่ต้องใช้ไฟล์ .bat และไม่ต้องเปลี่ยน ExecutionPolicy
+macOS/Linux ใช้คำสั่งเดียวกันโดยเปลี่ยน `npm.cmd` เป็น `npm` และติดตั้ง Python 3.11 ก่อน
+
+### คำสั่งติดตั้งทำอะไรบ้าง
+
+- ตรวจเวอร์ชัน Node.js ตามข้อกำหนดของแพ็กเกจ PDF: 22.13+ ในสาย 22 หรือ 24+
+- เลือก Python 3.11 แบบ 64-bit และสร้าง `backend/.venv` บนเครื่องปลายทาง
+- ถ้าเจอ virtual environment จากเครื่องเดิม จะเก็บไว้เป็น `.venv.backup-...` และสร้างใหม่
+- ติดตั้ง PyTorch แบบ CPU บน Windows/Linux จึงไม่จำเป็นต้องมี NVIDIA/CUDA
+- ติดตั้งแพ็กเกจ Frontend ด้วย `npm ci` จาก lockfile
+- สร้าง `.env.local` และ `backend/.env` จากตัวอย่างเฉพาะเมื่อยังไม่มี
+- โหลด `best.pt` และลองประมวลผลภาพว่างหนึ่งภาพก่อนแจ้งว่าติดตั้งเสร็จ
+
+ต้องใช้อินเทอร์เน็ตในการติดตั้งครั้งแรกและมีพื้นที่ว่างสำหรับแพ็กเกจ AI
+โฟลเดอร์โปรเจกต์ต้องเขียนไฟล์ได้ แนะนำให้แตกไปโฟลเดอร์ผู้ใช้ เช่น `C:\Projects\Sketch2Spec`
+
+### ถ้าเคยติดตั้งเวอร์ชันเก่า
+
+ถ้า `.env.local` เดิมชี้พอร์ต 8000 หรือค่าตั้งค่า Login ไม่ตรงกัน ให้สำรองและตั้งค่าเป็น Local Demo ใหม่ด้วย:
 
 ```powershell
-npm install
-npm run dev
+npm.cmd run setup -- --local-config
+npm.cmd run local
 ```
 
-กรณี npm ในเครื่องขึ้น `Exit handler never called!` ให้ใช้ pnpm ผ่าน Corepack:
+คำสั่งนี้สำรองไฟล์ตั้งค่าเดิมไว้เป็น `.backup-...` ก่อนเขียนใหม่ ใช้สำหรับรันในเครื่องตัวเอง
+ค่าตั้งค่า Production ยังอธิบายใน `docs/AUTHENTICATION.md`
 
-```powershell
-corepack pnpm@latest-10 install
-corepack pnpm@latest-10 run dev
-```
+### ปัญหาที่พบบ่อย
 
-เปิดเว็บ:
+| อาการ | วิธีแก้ |
+|---|---|
+| npm หา package.json ไม่เจอ | เปิด Terminal ในโฟลเดอร์ที่มี package.json |
+| npm.ps1 ถูกบล็อก | ใช้ `npm.cmd` ตามคำสั่งด้านบน |
+| ไม่พบ Python 3.11 | ติดตั้ง Python 3.11 แบบ 64-bit แล้วเปิด VS Code ใหม่ |
+| สร้าง venv ไม่สำเร็จ | ตรวจว่าโฟลเดอร์เขียนได้และ Python ทำงาน; หาก Python จาก Store มีปัญหาให้ใช้ตัวติดตั้งจาก python.org แล้วรัน setup ใหม่ |
+| Port 3000 หรือ 8001 is busy | ปิด Terminal ของเซิร์ฟเวอร์เก่าด้วย Ctrl+C แล้วรันใหม่; ตัวเปิดจะไม่ฆ่าโปรแกรมอื่นและไม่เปลี่ยนพอร์ตเอง |
+| Login ขึ้น Untrusted request origin | เปิด localhost:3000 หรือ 127.0.0.1:3000 และตรวจ AUTH_ALLOWED_ORIGINS ทั้งสองไฟล์ |
+| Service unavailable | ดูข้อความใน Terminal ว่า Backend เปิดสำเร็จ และตรวจพอร์ตใน .env.local |
+| pip/npm ดาวน์โหลดไม่ได้ | ตรวจอินเทอร์เน็ต/Proxy แล้วรัน setup อีกครั้ง |
 
-```text
-http://localhost:3000/upload
-```
+### ตั้งค่าและเปิดเอง (กรณีไม่ใช้ local launcher)
 
-## รัน Frontend ครั้งถัดไป
-
-เลือกใช้คำสั่งเดียวกับตัวจัดการแพ็กเกจที่ติดตั้งสำเร็จครั้งแรก:
-
-```powershell
-npm run dev
-```
-
-หรือ:
-
-```powershell
-corepack pnpm@latest-10 run dev
-```
-
-## ตั้งค่า URL ของ Backend
-
-ค่าเริ่มต้นคือ `http://localhost:8000` กรณีใช้พอร์ตอื่น ให้สร้าง `.env.local` ที่โฟลเดอร์หลัก:
+ไฟล์ `.env.local`:
 
 ```env
-NEXT_PUBLIC_DETECTION_API_URL=http://localhost:8000
+DETECTION_API_URL=http://127.0.0.1:8001
+AUTH_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
+
+Backend ใน Terminal แรก (หลัง setup):
+
+```powershell
+.\backend\.venv\Scripts\python.exe -m uvicorn main:app --app-dir backend --env-file backend/.env --host 127.0.0.1 --port 8001
+```
+
+Frontend ใน Terminal ที่สอง:
+
+```powershell
+npm.cmd run dev -- --hostname 127.0.0.1 --port 3000
+```
+
+ตรวจ Backend ที่ http://127.0.0.1:8001/health โมเดลอยู่ที่ `backend/best.pt`
+การแก้ชุดนี้สำหรับส่งโปรเจกต์ไปติดตั้งและรันบนเครื่องอื่น โดยแต่ละเครื่องเปิดเซิร์ฟเวอร์ของตนเอง
+หากต้องการเปิดข้ามเครือข่ายหรือเผยแพร่บน Vercel ต้องตั้ง Backend และระบบ Auth สำหรับ HTTPS ตามคู่มือแยก
+
+## ผลตรวจชุดแก้การย้ายเครื่อง (29 กันยายน 2026)
+
+- ติดตั้งใหม่ด้วย Python 3.11 และแพ็กเกจตามคำสั่ง setup บน Linux สำเร็จ
+- โหลดโมเดล best.pt และทดลอง inference ด้วย CPU สำเร็จ
+- ESLint, TypeScript และ Next.js production build ผ่าน
+- ทดสอบเปิดสองเซิร์ฟเวอร์, หน้า Login, Login, /auth/me, หน้า Editor และ Logout ผ่าน HTTP สำเร็จ
+- ชุดทดสอบ Authentication 11 ข้อผ่าน
+- ยังไม่ได้รันทดสอบบน Windows จริงหรือทดสอบเครื่องปลายทางของผู้ใช้; ยังไม่ได้ตรวจ UI ทุกฟีเจอร์ 2D/3D ในชุดแก้นี้
 
 ## ไฟล์ที่รองรับ
 
@@ -227,7 +203,8 @@ npm run check
 
 ```text
 Frontend: http://localhost:3000
-Backend:  http://localhost:8000
+Backend:  http://127.0.0.1:8001
+Login:    http://localhost:3000/login
 ```
 
 ต้องเปิด Backend และ Frontend แยกกันคนละ Terminal

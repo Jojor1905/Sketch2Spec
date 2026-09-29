@@ -11,11 +11,13 @@ import fitz
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from auth_test_helpers import configure_test_auth, login_client
+configure_test_auth()
 from main import app
 
 
 def main() -> None:
-    client = TestClient(app)
+    client = login_client(TestClient(app))
 
     health = client.get("/health")
     health.raise_for_status()

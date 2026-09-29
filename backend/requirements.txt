@@ -1,6 +1,14 @@
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
-ultralytics==8.3.49
+ultralytics==8.4.51
 python-multipart==0.0.19
 pillow==11.0.0
 PyMuPDF>=1.24,<2
+
+argon2-cffi==25.1.0
+redis==6.4.0
+
+# Reproducible CPU-compatible runtime; setup installs CPU wheels first.
+torch==2.6.0
+torchvision==0.21.0
+python-dotenv==1.0.1

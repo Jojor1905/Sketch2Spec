@@ -39,6 +39,7 @@ Sketch2Spec เปลี่ยนภาพแปลนบ้านเป็น�
 | ประมาณราคา | คำนวณรายการวัสดุที่ยืนยันใช้แล้ว เมื่อกำหนดมาตราส่วน และส่งออก CSV |
 | Undo/Redo | ย้อนกลับและทำซ้ำการแก้ไข รวมการใช้วัสดุ |
 | เก็บงาน | บันทึกงานล่าสุดใน IndexedDB ของเบราว์เซอร์ พร้อมสถานะการบันทึก |
+| รายงาน PDF | ฟังก์ชันจาก repo เดิม: เปิดรายงานพร้อมภาพแปลน ภาพ 3D และวัสดุ ผ่านหน้าต่างพิมพ์ของเบราว์เซอร์ เลือก Save as PDF ได้ |
 | ย้ายงาน | ส่งออก/เปิดไฟล์ `.sketch2spec.json` ซึ่งรวมภาพ วัตถุ มาตราส่วน และวัสดุ |
 
 เครื่องมือสร้างฝ้าและหมวดวัสดุฝ้าถูกนำออกจาก UI แล้ว แต่ยังรองรับการเปิดวัตถุฝ้าที่มีในไฟล์เก่า
@@ -95,39 +96,20 @@ Sketch2Spec เปลี่ยนภาพแปลนบ้านเป็น�
 
 การบันทึกอัตโนมัติอยู่ในเบราว์เซอร์เดิม ไม่ได้อยู่ใน GitHub และไม่ใช่การสำรองบนเซิร์ฟเวอร์ การส่งโค้ดให้เพื่อนไม่ได้ส่งแปลนที่กำลังเปิดอยู่ด้วย ต้องส่งไฟล์สำรองงานแยกต่างหาก
 
-## 4. วิธีรันบนเครื่องใหม่
+## 4. ติดตั้งและเปิดใช้งาน
 
-สภาพแวดล้อมที่ใช้ทดสอบงานล่าสุด: macOS, Node.js 26 และ Python 3.11 ส่วนคำสั่ง Windows อยู่ใน [README](../README.md)
+ติดตั้ง Python 3.11 แบบ 64-bit และ Node.js 24 ก่อน จากนั้นเปิด Terminal ในโฟลเดอร์ที่มี package.json:
 
-จากโฟลเดอร์หลักของโปรเจกต์ ติดตั้งครั้งแรก:
-
-```bash
-npm ci
-python3.11 -m venv backend/.venv
-backend/.venv/bin/python -m pip install -r backend/requirements.txt
+```powershell
+npm.cmd run setup
+npm.cmd run local
 ```
 
-ต้องมี Python 3.11 และ Node.js/npm ติดตั้งอยู่ก่อน และต้องมีโมเดลเดิมที่ `backend/best.pt`
-
-เปิด Terminal สองแท็บ จากโฟลเดอร์หลัก:
-
-```bash
-# แท็บที่ 1: Backend
-backend/.venv/bin/python -m uvicorn main:app --app-dir backend --host 127.0.0.1 --port 8000
-```
-
-```bash
-# แท็บที่ 2: Frontend
-npm run dev -- --hostname 127.0.0.1
-```
-
-- เว็บ: `http://localhost:3000/upload`
-- ตรวจ backend: `http://localhost:8000/health`
-- เอกสาร API: `http://localhost:8000/docs`
-
-เปิด Terminal ทั้งสองไว้ระหว่างใช้งาน ครั้งถัดไปใช้เพียงสองคำสั่งรัน ไม่ต้องติดตั้งใหม่ กด Control+C เพื่อหยุด
-
-ค่าเริ่มต้น backend URL คือ `http://localhost:8000` หากเปลี่ยนพอร์ตให้ตั้ง `NEXT_PUBLIC_DETECTION_API_URL` ใน `.env.local` ดูตัวอย่างได้จาก [`.env.example`](../.env.example) แล้วเริ่ม frontend ใหม่
+macOS/Linux ใช้ `npm` แทน `npm.cmd` ครั้งถัดไปใช้เฉพาะคำสั่ง `run local`
+เปิด http://localhost:3000/login แล้วใช้บัญชี Demo `admin1234 / admin1234`
+Backend อยู่ที่ http://127.0.0.1:8001/health และ http://127.0.0.1:8001/docs
+ตัวเปิดใช้ไฟล์ตั้งค่าของทั้งสองฝั่งและเปิดเซิร์ฟเวอร์ให้ กด Ctrl+C เพื่อหยุด
+รายละเอียดการส่งไปเครื่องอื่นและวิธีแก้ปัญหาอยู่ใน [README](../README.md)
 
 ## 5. โครงสร้างสำหรับผู้พัฒนารับช่วงต่อ
 
@@ -144,6 +126,7 @@ Frontend ใช้ Next.js/React/TypeScript และ Three.js ผ่าน Reac
 | `lib/floor-plan.ts` | ชนิดข้อมูลและฟังก์ชันพื้นฐานของวัตถุ |
 | `lib/floor-plan-repair.ts` | กรองวัตถุซ้ำและสร้างพื้นจากพื้นที่ปิด |
 | `lib/rooms.ts` | รูปทรงพื้น ผิวผนังที่ติดห้อง ขอบเขตวัสดุ และตรวจพื้นซ้อน |
+| `lib/export-report.ts` | สร้างหน้ารายงานสำหรับพิมพ์/บันทึก PDF ซึ่งคงไว้จากงานล่าสุดของ repo เดิม |
 | `lib/materials.ts` | แค็ตตาล็อกวัสดุ ราคาสาธิต และคำนวณงบ |
 | `lib/procedural-textures.ts` | สร้างลายวัสดุ |
 | `lib/project-storage.ts` | บันทึกงานล่าสุดใน IndexedDB |
