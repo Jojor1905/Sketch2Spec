@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -21,10 +22,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
+logger = logging.getLogger(__name__)
+_yolo_import_error: Exception | None = None
 try:
     from ultralytics import YOLO
-except ImportError:  # Keep /health and /docs available before dependencies are installed.
+except Exception as error:  # Keep /health and /docs available when the AI runtime cannot import.
     YOLO = None  # type: ignore[assignment]
+    _yolo_import_error = error
+    logger.exception("Unable to import the Ultralytics YOLO runtime")
 
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "best.pt"
@@ -179,7 +184,7 @@ def get_model() -> Any:
     if _model is not None:
         return _model
     if YOLO is None:
-        raise RuntimeError("ultralytics is not installed. Run: pip install -r requirements.txt")
+        raise RuntimeError("YOLO runtime is unavailable. Check Cloud Run logs for import details.") from _yolo_import_error
     if not MODEL_PATH.exists():
         raise RuntimeError(f"Model file not found: {MODEL_PATH}")
     with _model_lock:
