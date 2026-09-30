@@ -9,6 +9,25 @@
 
 เอกสารคู่มือแอปสรุปพฤติกรรมปัจจุบัน รวมเมนูทาสีผนังแบบเลือกห้องและหมายเลขผนัง
 
+## Production architecture
+
+```text
+GitHub (main)
+├── Vercel
+│   └── Next.js / React / TypeScript frontend + same-origin BFF
+└── Google Cloud Run (via Cloud Build)
+    └── Docker / Python 3.11 / FastAPI / Ultralytics YOLO
+```
+
+Production request flow:
+
+```text
+Browser → Vercel frontend → Vercel BFF/API layer → Cloud Run FastAPI
+        → YOLO (`backend/best.pt`) → detection result → Sketch2Spec editor
+```
+
+Google Colab is not part of the production deployment. It may be used separately for historical development or model experimentation, but production uses Vercel and Google Cloud Run.
+
 ## ความต้องการของระบบ
 
 - Node.js 20 ขึ้นไป
@@ -16,6 +35,8 @@
 - macOS หรือ Windows (ทดสอบการแก้ล่าสุดบน macOS)
 - โปรแกรมแก้ไขโค้ด เช่น VS Code ตามสะดวก
 - อินเทอร์เน็ตสำหรับติดตั้งแพ็กเกจครั้งแรก
+
+Production backend additionally uses Docker, Google Cloud Build, and Google Cloud Run. Ultralytics provides the YOLO/OpenCV/PyTorch runtime stack; Pillow and PyMuPDF handle image and PDF processing.
 
 โปรเจกต์ใช้พาธแบบ Relative จึงแตก ZIP ไปไว้ที่ไดรฟ์หรือชื่อโฟลเดอร์ใดก็ได้
 
@@ -48,10 +69,10 @@ npm run dev -- --hostname 127.0.0.1
 เปิดทั้งสองแท็บค้างไว้ระหว่างใช้งาน กด Control+C เพื่อหยุด
 ใช้โมเดลเดิมที่ `backend/best.pt` โดยไม่ต้องฝึกหรือดาวน์โหลดโมเดลใหม่
 
-หากต้องการรัน backend smoke test ให้ติดตั้ง `httpx` เพิ่มใน virtual environment:
+หากต้องการรัน backend smoke test ให้ติดตั้ง test dependencies เพิ่มใน virtual environment:
 
 ```bash
-backend/.venv/bin/python -m pip install httpx
+backend/.venv/bin/python -m pip install -r backend/requirements-test.txt
 backend/.venv/bin/python backend/test_api_smoke.py
 ```
 
@@ -121,25 +142,68 @@ npm run dev
 corepack pnpm@latest-10 run dev
 ```
 
-## ตั้งค่า URL ของ Backend
+## Local configuration and MVP login
 
-ค่าเริ่มต้นคือ `http://localhost:8000` กรณีใช้พอร์ตอื่น ให้สร้าง `.env.local` ที่โฟลเดอร์หลัก:
+Local frontend runs at `http://localhost:3000`; local backend runs at `http://localhost:8000`. Set the backend URL in a root `.env.local` when necessary:
 
 ```env
 NEXT_PUBLIC_DETECTION_API_URL=http://localhost:8000
 ```
 
-## การเปิดใช้งานจาก Vercel และ Colab
+Authentication is enabled for `/upload`. The frontend uses a Vercel BFF/session cookie and forwards authenticated API requests to the backend; the browser does not store the backend bearer token.
 
-หน้า Home (`/`) เป็นหน้าแรก และกดปุ่มเริ่มใช้งานเพื่อไป `/upload` ได้ทันทีโดยไม่มี login
+For the MVP demo account only:
 
-Frontend สามารถใช้ `localhost:3000`, `3001` หรือพอร์ตอื่นได้ เพราะ backend อนุญาตเฉพาะ localhost ทุกพอร์ตในการพัฒนา
+```text
+Username: admin1234
+Password: admin1234
+```
 
-สำหรับ Vercel กับ backend HTTPS บน Colab หรือ hosting อื่น ให้ตั้ง `NEXT_PUBLIC_DETECTION_API_URL` บน Vercel เป็น URL backend และตั้ง `ALLOWED_ORIGINS=https://<your-vercel-domain>` บน backend ก่อน deploy
+Do not use these as production credentials. Configure `DEMO_USERNAME`, `DEMO_PASSWORD`, and a strong `AUTH_SECRET` in the backend environment instead.
 
-### Render backend
+## Production deployment
 
-ไฟล์ [`render.yaml`](render.yaml) ตั้งค่า FastAPI backend สำหรับ Render แล้ว เลือก New > Blueprint หรือ New > Web Service แล้วเชื่อม GitHub repo นี้ จากนั้นตั้ง `ALLOWED_ORIGINS` เป็น URL ของ Vercel เช่น `https://sketch2-spec.vercel.app` และนำ URL `onrender.com` ที่ได้รับไปใส่เป็น `NEXT_PUBLIC_DETECTION_API_URL` ใน Vercel แล้ว redeploy
+### Frontend — Vercel
+
+- Deployment source: GitHub `main` branch
+- Framework: Next.js / React / TypeScript
+- Set this Vercel environment variable:
+
+```env
+NEXT_PUBLIC_DETECTION_API_URL=https://your-cloud-run-service.run.app
+```
+
+The Vercel BFF uses this value to call Cloud Run server-to-server while keeping the authenticated session cookie first-party.
+
+### Backend — Google Cloud Run
+
+- Deployment source: GitHub `main` branch through Cloud Build / Cloud Run continuous deployment
+- Dockerfile: `backend/Dockerfile`
+- Docker build context: `backend/`
+- Runtime: Docker, Python 3.11, FastAPI, Uvicorn, Ultralytics YOLO
+- AI model: `backend/best.pt`
+
+Set these Cloud Run environment variables (use real secret values in the deployment platform, never in Git):
+
+```env
+DEMO_USERNAME=admin1234
+DEMO_PASSWORD=admin1234
+AUTH_SECRET=<your-secure-secret>
+ALLOWED_ORIGINS=https://your-vercel-project.vercel.app
+```
+
+`backend/Dockerfile` installs production dependencies from `backend/requirements.txt`, includes `best.pt`, and validates Ultralytics imports while Cloud Build creates the image. Google Colab and the legacy [`render.yaml`](render.yaml) configuration are not used for this production backend.
+
+Never commit `.env` or `.env.local`; use [`.env.example`](.env.example) only as a safe configuration template.
+
+### Production limitations
+
+- Cloud Run can cold-start when minimum instances is zero.
+- The MVP should use a low instance count: detection jobs and logout token revocation currently use process memory.
+- `plan_result.json` and other generated backend files are ephemeral container data, not durable cloud storage.
+- Monitor Cloud Run memory, CPU, and inference latency for the YOLO runtime.
+- The demo account is MVP-only; production credentials and `AUTH_SECRET` must be managed securely.
+- Google Cloud Free Trial credits are temporary and should not be treated as permanent free hosting.
 
 ## ไฟล์ที่รองรับ
 
@@ -147,6 +211,8 @@ Frontend สามารถใช้ `localhost:3000`, `3001` หรือพอ
 - PNG
 - WebP
 - PDF หลายหน้า พร้อมเลือกหน้าที่ต้องการ
+
+High-level AI pipeline: upload floor plan → validate/prepare image or PDF → FastAPI backend → YOLO inference → detection result → 2D/3D Sketch2Spec workflow.
 
 ## Stage 1–3
 
