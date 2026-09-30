@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import subprocess
@@ -13,10 +16,11 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 import fitz
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
+from pydantic import BaseModel
 try:
     from ultralytics import YOLO
 except ImportError:  # Keep /health and /docs available before dependencies are installed.
@@ -28,6 +32,7 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_IMAGE_DIMENSION = 2000
 SUPPORTED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 JOB_TTL_SECONDS = 30 * 60
+AUTH_TOKEN_TTL_SECONDS = 8 * 60 * 60
 
 
 def _load_local_env() -> None:
@@ -51,6 +56,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    # Browser traffic goes through the Vercel same-origin BFF using Bearer auth,
+    # rather than relying on a cross-site Cloud Run cookie.
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -62,6 +69,109 @@ _model_lock = threading.Lock()
 _job_lock = threading.Lock()
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sketch2spec-detect")
 _jobs: dict[str, dict[str, Any]] = {}
+_revoked_token_ids: dict[str, float] = {}
+_auth_lock = threading.Lock()
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+def _base64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _base64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _auth_secret() -> bytes:
+    # Defaults make the documented local demo work. Cloud Run must override this
+    # with a long, random AUTH_SECRET before production deployment.
+    return os.getenv("AUTH_SECRET", "development-only-change-this-secret").encode("utf-8")
+
+
+def _create_access_token(username: str) -> str:
+    now = int(time.time())
+    payload = {
+        "sub": username,
+        "iat": now,
+        "exp": now + AUTH_TOKEN_TTL_SECONDS,
+        "jti": uuid.uuid4().hex,
+    }
+    encoded_payload = _base64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    signature = hmac.new(_auth_secret(), encoded_payload.encode("ascii"), hashlib.sha256).digest()
+    return f"{encoded_payload}.{_base64url_encode(signature)}"
+
+
+def _validate_access_token(token: str) -> dict[str, Any]:
+    try:
+        encoded_payload, encoded_signature = token.split(".", 1)
+        expected = hmac.new(_auth_secret(), encoded_payload.encode("ascii"), hashlib.sha256).digest()
+        if not hmac.compare_digest(expected, _base64url_decode(encoded_signature)):
+            raise ValueError("signature")
+        payload = json.loads(_base64url_decode(encoded_payload))
+        if not isinstance(payload, dict) or not isinstance(payload.get("sub"), str):
+            raise ValueError("payload")
+        if int(payload.get("exp", 0)) <= int(time.time()):
+            raise ValueError("expired")
+        token_id = payload.get("jti")
+        if not isinstance(token_id, str):
+            raise ValueError("token id")
+        with _auth_lock:
+            now = time.time()
+            for revoked_id, expiry in list(_revoked_token_ids.items()):
+                if expiry <= now:
+                    _revoked_token_ids.pop(revoked_id, None)
+            if token_id in _revoked_token_ids:
+                raise ValueError("revoked")
+        return payload
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+        raise HTTPException(status_code=401, detail="Authentication required.") from None
+
+
+def _bearer_token(authorization: str | None) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return token
+
+
+def require_authenticated_user(authorization: str | None = Header(default=None)) -> str:
+    return str(_validate_access_token(_bearer_token(authorization))["sub"])
+
+
+@app.post("/auth/login")
+def login(credentials: LoginRequest) -> dict[str, Any]:
+    demo_username = os.getenv("DEMO_USERNAME", "admin1234")
+    demo_password = os.getenv("DEMO_PASSWORD", "admin1234")
+    valid_username = hmac.compare_digest(credentials.username, demo_username)
+    valid_password = hmac.compare_digest(credentials.password, demo_password)
+    if not (valid_username and valid_password):
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+    return {
+        "access_token": _create_access_token(demo_username),
+        "token_type": "bearer",
+        "username": demo_username,
+        "expires_in": AUTH_TOKEN_TTL_SECONDS,
+    }
+
+
+@app.post("/auth/logout")
+def logout(authorization: str | None = Header(default=None)) -> dict[str, bool]:
+    token = _bearer_token(authorization)
+    payload = _validate_access_token(token)
+    with _auth_lock:
+        _revoked_token_ids[str(payload["jti"])] = float(payload["exp"])
+    return {"logged_out": True}
+
+
+@app.get("/auth/me")
+def auth_me(current_user: str = Depends(require_authenticated_user)) -> dict[str, str]:
+    return {"username": current_user}
 
 
 def get_model() -> Any:
@@ -114,7 +224,10 @@ def health_check() -> dict[str, Any]:
 
 
 @app.post("/pdf/info")
-async def pdf_info(file: UploadFile = File(...)) -> dict[str, int]:
+async def pdf_info(
+    file: UploadFile = File(...),
+    _: str = Depends(require_authenticated_user),
+) -> dict[str, int]:
     data = await read_upload(file)
     if not is_pdf_upload(data, file.filename, file.content_type):
         raise HTTPException(status_code=400, detail="The uploaded file is not a PDF.")
@@ -133,6 +246,7 @@ async def pdf_info(file: UploadFile = File(...)) -> dict[str, int]:
 async def prepare_floor_plan(
     file: UploadFile = File(...),
     page: int = Query(default=1, ge=1),
+    _: str = Depends(require_authenticated_user),
 ) -> StreamingResponse:
     """Normalize an image or convert a selected PDF page into a PNG preview."""
     data = await read_upload(file)
@@ -158,6 +272,7 @@ async def prepare_floor_plan(
 async def create_detection_job(
     file: UploadFile = File(...),
     confidence: float = Query(default=0.25, ge=0.01, le=0.99),
+    _: str = Depends(require_authenticated_user),
 ) -> dict[str, str]:
     """Start a real detection job so the UI can show backend-reported progress."""
     _cleanup_jobs()
@@ -189,7 +304,10 @@ async def create_detection_job(
 
 
 @app.get("/detect/jobs/{job_id}")
-def get_detection_job(job_id: str) -> dict[str, Any]:
+def get_detection_job(
+    job_id: str,
+    _: str = Depends(require_authenticated_user),
+) -> dict[str, Any]:
     _cleanup_jobs()
     with _job_lock:
         job = _jobs.get(job_id)
@@ -207,7 +325,10 @@ def get_detection_job(job_id: str) -> dict[str, Any]:
 
 
 @app.delete("/detect/jobs/{job_id}")
-def delete_detection_job(job_id: str) -> dict[str, bool]:
+def delete_detection_job(
+    job_id: str,
+    _: str = Depends(require_authenticated_user),
+) -> dict[str, bool]:
     with _job_lock:
         removed = _jobs.pop(job_id, None) is not None
     return {"deleted": removed}
@@ -217,6 +338,7 @@ def delete_detection_job(job_id: str) -> dict[str, bool]:
 async def detect_floor_plan(
     file: UploadFile = File(...),
     confidence: float = Query(default=0.25, ge=0.01, le=0.99),
+    _: str = Depends(require_authenticated_user),
 ) -> dict[str, Any]:
     """Compatibility endpoint for clients that do not use job polling."""
     data = await read_upload(file)

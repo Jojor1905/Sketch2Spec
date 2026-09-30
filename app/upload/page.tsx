@@ -16,6 +16,7 @@ import {
   FileImage,
   FileText,
   Loader2,
+  LogOut,
   Maximize2,
   PanelLeftClose,
   PanelLeftOpen,
@@ -114,8 +115,9 @@ type SavedSession = {
 
 type WorkspaceView = "2d" | "3d"
 
-const API_URL =
-  process.env.NEXT_PUBLIC_DETECTION_API_URL ?? "http://localhost:8000"
+// The browser uses Vercel's same-origin proxy. That proxy reads
+// NEXT_PUBLIC_DETECTION_API_URL server-side and forwards the HttpOnly session.
+const API_URL = "/api/backend"
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024
 const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"]
@@ -264,6 +266,7 @@ export default function UploadPage() {
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle")
   const [storageMessage, setStorageMessage] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
 
   const [file, setFile] = useState<File | null>(null)
   const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null)
@@ -299,6 +302,16 @@ export default function UploadPage() {
   const hasWorkspace = Boolean(imageSize)
   const canUndo = historyIndexRef.current > 0
   const canRedo = historyIndexRef.current >= 0 && historyIndexRef.current < historyRef.current.length - 1
+
+  const logout = useCallback(async () => {
+    setIsLoggingOut(true)
+    try {
+      await fetch("/api/auth/logout", { method: "POST" })
+    } finally {
+      router.replace("/login")
+      router.refresh()
+    }
+  }, [router])
 
   const selectedDetection = useMemo(
     () => editableDetections.find((detection) => detection.id === selectedId) ?? null,
@@ -1117,6 +1130,10 @@ export default function UploadPage() {
           </Button>
 
           <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="ghost" size="sm" className="rounded-xl" onClick={() => void logout()} disabled={isLoggingOut}>
+              <LogOut className="h-4 w-4" />
+              {isLoggingOut ? "Signing out…" : "Logout"}
+            </Button>
             {hasWorkspace && (
               <>
                 <Button

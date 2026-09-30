@@ -21,11 +21,19 @@ def main() -> None:
     health.raise_for_status()
     assert health.json()["status"] in {"ok", "degraded"}
 
+    login = client.post(
+        "/auth/login",
+        json={"username": "admin1234", "password": "admin1234"},
+    )
+    login.raise_for_status()
+    authorization = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
     image_buffer = io.BytesIO()
     Image.new("RGB", (2500, 1000), "white").save(image_buffer, "PNG")
     prepared_image = client.post(
         "/prepare",
         files={"file": ("sample.png", image_buffer.getvalue(), "image/png")},
+        headers=authorization,
     )
     prepared_image.raise_for_status()
     assert prepared_image.headers["x-image-width"] == "2000"
@@ -41,6 +49,7 @@ def main() -> None:
     pdf_info = client.post(
         "/pdf/info",
         files={"file": ("sample.pdf", pdf_bytes, "application/pdf")},
+        headers=authorization,
     )
     pdf_info.raise_for_status()
     assert pdf_info.json()["page_count"] == 3
@@ -48,6 +57,7 @@ def main() -> None:
     prepared_pdf = client.post(
         "/prepare?page=2",
         files={"file": ("sample.pdf", pdf_bytes, "application/pdf")},
+        headers=authorization,
     )
     prepared_pdf.raise_for_status()
     assert prepared_pdf.headers["x-pdf-page"] == "2"

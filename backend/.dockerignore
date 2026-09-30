@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+.venv/
+venv/
+test_*.py
+test_results/
+plan_result.json
+generate_blender.py
+*.ipynb
+*.log
+runs/
+*.DS_Store
