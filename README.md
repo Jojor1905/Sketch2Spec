@@ -137,6 +137,10 @@ Frontend สามารถใช้ `localhost:3000`, `3001` หรือพอ
 
 สำหรับ Vercel กับ backend HTTPS บน Colab หรือ hosting อื่น ให้ตั้ง `NEXT_PUBLIC_DETECTION_API_URL` บน Vercel เป็น URL backend และตั้ง `ALLOWED_ORIGINS=https://<your-vercel-domain>` บน backend ก่อน deploy
 
+### Render backend
+
+ไฟล์ [`render.yaml`](render.yaml) ตั้งค่า FastAPI backend สำหรับ Render แล้ว เลือก New > Blueprint หรือ New > Web Service แล้วเชื่อม GitHub repo นี้ จากนั้นตั้ง `ALLOWED_ORIGINS` เป็น URL ของ Vercel เช่น `https://sketch2-spec.vercel.app` และนำ URL `onrender.com` ที่ได้รับไปใส่เป็น `NEXT_PUBLIC_DETECTION_API_URL` ใน Vercel แล้ว redeploy
+
 ## ไฟล์ที่รองรับ
 
 - JPG
